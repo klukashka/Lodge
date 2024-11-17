@@ -9,7 +9,7 @@ Press `lodge` to take a rest in a lodge (if you are a tired wanderer, of course)
 
 ## 🖥️ Installation
 
-To be able to take rest immediately just follow [INSTALLATION.md](https://github.com/klukashka/Lodge.git/INSTALLATION.md)
+To be able to take rest immediately just follow [INSTALLATION.md](https://github.com/klukashka/Lodge/blob/main/INSTALLATION.md)
 
 ## 👋 Contributing
 
