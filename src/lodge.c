@@ -122,14 +122,14 @@ void render_message(int total_lines){
         for (int j = 0; j < LINE_LENGTH; ++j){
             printf("%c", message[i][j]); // print a letter
             fflush(stdout);
-            usleep(40000);
+            usleep(35000);
 
         }
-        usleep(110000);
+        usleep(80000);
         // printf("\r");
         printf("\033[2K\r");
     }
-    usleep(800000);
+    usleep(1000000);
 
 }
 
