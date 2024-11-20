@@ -1,3 +1,7 @@
+# Currently in develop
+
+## Tested only on Ubuntu 22
+
 # 🏕️Lodge
 
 **Lodge** is a library made for Debian/Ubuntu Linux. 
