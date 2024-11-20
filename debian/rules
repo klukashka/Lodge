@@ -1,0 +1,18 @@
+#!/usr/bin/make -f
+
+# Set the default target to build the package
+%:
+	dh $@
+
+# Override dh_auto_install to install the program using dh_install
+override_dh_auto_install:
+	dh_install
+	# Optionally, ensure maintainer scripts have the correct permissions
+	chmod 755 debian/postrm debian/postinst
+	gcc -Wall -o ./usr/games/lodge/lodge ./src/lodge.c
+
+# Override clean to clean up build files
+override_dh_clean:
+	dh_clean
+	# Optionally, remove build artifacts if you want to be extra thorough
+	rm -rf build
