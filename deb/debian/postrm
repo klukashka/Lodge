@@ -1,0 +1,19 @@
+#!/bin/bash
+
+case "$1" in 
+    remove)
+        echo "Removing lodge package..."
+        rm -f /usr/bin/lodge
+        rm -r -f /usr/games/lodge
+        rm -r -f /src
+        rm -r -f /include
+        rm -f README.md  # if it is occasionally there
+        rm -f INSTALLATION.md  # if it is occasionally there
+        ;;
+    *)
+        echo "Usage: $0 {remove}"
+        exit 1
+        ;;
+esac
+
+exit 0
