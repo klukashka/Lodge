@@ -27,10 +27,10 @@
 
     3. Go into **deb/** folder of the project
 
-    3. Run the following to build a package
+    4. Run the following to build a package
 
     ```
     dpkg-buildpackage -us -uc
     ```
 
-    4. The built package will appear in the parent directory. To install it follow the *3rd* and *4th* steps of the guide above
+    5. The built package will appear in the parent directory. To install it follow the *3rd* and *4th* steps of the guide above
