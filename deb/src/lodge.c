@@ -131,7 +131,6 @@ void render_message(int total_lines){
         printf("\033[2K\r");
     }
     usleep(800000);
-
 }
 
 void render_bye(){
@@ -172,6 +171,7 @@ void handle_signal(int signal) {
         render_bye();
         printf("\033[?25h"); // show cursor
         printf("\033[2J\033[H"); // clear the screen
+        exit(0);
     }
 }
 
