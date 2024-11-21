@@ -1,6 +1,7 @@
 # Installing library using released packages:
 
-- ## deb (for Debian/Ubuntu)
+* ## deb (for Debian/Ubuntu)
+
     1. Make sure you have a `gcc` compiler
 
     2. Download the latest release of the package
@@ -13,7 +14,9 @@
     ```
     
 # Building your own package from the existing one:
-- ## deb (Debian/Ubuntu)
+
+* ## deb (Debian/Ubuntu)
+
     1. Make sure you have a `gcc` compiler
 
     2. Clone the repository to any folder you want
