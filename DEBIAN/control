@@ -1,8 +1,0 @@
-Package: lodge
-Version: 0.001
-Architecture: amd64
-Maintainer: klukashka <klukin0202@yandex.ru>
-Description: Lodge. A place for wanderers to rest.
-Depends: libc6 (>= 2.28)
-Priority: optional
-Section: utils

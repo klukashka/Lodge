@@ -1,3 +1,0 @@
-#!/bin/bash
-gcc -o /usr/games/lodge/lodge ./src/lodge.c
-chmod +x /usr/bin/lodge
