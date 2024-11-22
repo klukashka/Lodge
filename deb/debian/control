@@ -5,5 +5,4 @@ Maintainer: klukashka <klukin0202@yandex.ru>
 
 Package: lodge
 Architecture: amd64
-Depends: libc6 (>= 2.28)
 Description: Lodge. A place for wanderers to rest.

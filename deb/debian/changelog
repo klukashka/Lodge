@@ -1,7 +1,5 @@
-lodge (0.1.1) stable; urgency=low
+lodge (0.1.2) stable; urgency=low
 
-  * New upstream release.
-  * Bugs fixed.
-  * Updated README for clarity.
+  * Changed control file
 
- -- klukashka <klukin0202@yandex.ru>  Thu, 21 Nov 2024 21:32:00 +0000
+ -- klukashka <klukin0202@yandex.ru> Fri, 22 Nov 2024 17:38:00 +0000
