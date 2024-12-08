@@ -19,6 +19,6 @@ submit a pull request.
 
 Not a developer? No problem! You can still contribute by creating issues, reporting bugs, or suggesting new ideas for
 project improvement (do this via GitHub Issues). Your insights and feedback are invaluable to our collective success and
-helps us to create the best non-native Email client.
+helps us to create a better place for taking rest.
 
 Thank you for your contribution and support to the project!
