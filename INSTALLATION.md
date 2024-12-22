@@ -2,7 +2,7 @@
 
 * ## deb (for Debian/Ubuntu)
 
-    1. Make sure you have a `gcc` compiler
+    1. Make sure you have a `gcc` compiler installed
 
     2. Download the latest release of the package
     
@@ -17,7 +17,7 @@
 
 * ## deb (Debian/Ubuntu)
 
-    1. Make sure you have a `gcc` compiler
+    1. Make sure you have a `gcc` compiler and `debhelper` installed
 
     2. Clone the repository to any folder you want
 
