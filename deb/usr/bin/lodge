@@ -1,2 +1,2 @@
 #!/bin/bash
-gnome-terminal --full-screen -- ./usr/games/lodge/lodge ./usr/games/lodge/texts/lodge_pic.txt ./usr/games/lodge/texts/message.txt
+gnome-terminal --full-screen -- /usr/games/lodge/lodge /usr/games/lodge/texts/lodge_pic.txt /usr/games/lodge/texts/message.txt
