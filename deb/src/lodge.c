@@ -6,6 +6,10 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include "../include/landscape.h"
+#include <termios.h>
+#include <signal.h>
+
+struct termios oldt, newt;
 
 #define min(x, y) ((x) < (y) ? (x) : (y))
 
@@ -17,6 +21,23 @@ const int thr_num = 2;
 int stop_looping = 0;
 pthread_t tid[2];
 pthread_mutex_t print_mutex;
+
+// --------------------------------------------------
+
+void disable_input() {
+    tcgetattr(STDIN_FILENO, &oldt);  // Get the current terminal settings
+    newt = oldt;  // Copy the settings
+
+    newt.c_lflag &= ~(ICANON | ECHO);  // Disable canonical mode and echo
+    tcsetattr(STDIN_FILENO, TCSANOW, &newt);  // Apply the new settings
+}
+
+void restore_input() {
+    tcsetattr(STDIN_FILENO, TCSANOW, &oldt);  // Restore the old settings
+}
+
+// ---------------------------------------------------
+
 
 // Function to read the file and store its lines
 int read_file_lines(const char *landscape_file, char lines[][LINE_LENGTH], int max_lines) {
@@ -171,6 +192,7 @@ void handle_signal(int signal) {
         render_bye();
         printf("\033[?25h"); // show cursor
         printf("\033[2J\033[H"); // clear the screen
+        restore_input();
         exit(0);
     }
 }
@@ -181,6 +203,8 @@ int main(int argc, char *argv[]) {
         printf("Usage: %s <landscape_file> <message_file>\n", argv[0]);
         return 1;
     }
+
+    disable_input();
 
     signal(SIGINT, handle_signal);
     signal(SIGTERM, handle_signal);
