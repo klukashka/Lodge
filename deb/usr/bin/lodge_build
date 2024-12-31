@@ -1,0 +1,2 @@
+#!/bin/bash
+gcc -o ./usr/games/lodge/lodge_trial  ./src/animation.c

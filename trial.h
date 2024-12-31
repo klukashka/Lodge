@@ -1,0 +1,1 @@
+int alive = 1;

@@ -1,0 +1,2 @@
+#!/bin/bash
+gnome-terminal --full-screen -- ./usr/games/lodge/lodge_trial
