@@ -5,7 +5,7 @@
 #include <pthread.h>
 #include <sys/types.h>
 #include <sys/wait.h>
-#include "../include/landscape.h"
+#include "landscape.h"
 #include <termios.h>
 #include <signal.h>
 
@@ -210,7 +210,6 @@ int main(int argc, char *argv[]) {
     signal(SIGTERM, handle_signal);
 
     landscape_file = argv[1];
-    printf("%c", *landscape_file);
     message_file = argv[2];
 
     int total_land_lines = read_file_lines(landscape_file, lines, LINES);

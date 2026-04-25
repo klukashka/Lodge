@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+prefix="${LODGE_PREFIX:-/usr/local}"
+bin="${LODGE_BIN:-$prefix/bin/lodge-bin}"
+texts_dir="${LODGE_TEXTS_DIR:-$prefix/share/lodge/texts}"
+
+landscape="${LODGE_LANDSCAPE:-$texts_dir/lodge_pic.txt}"
+message="${LODGE_MESSAGE:-$texts_dir/message.txt}"
+
+if [[ ! -x "$bin" ]]; then
+  echo "lodge: binary not found at: $bin" >&2
+  echo "lodge: set LODGE_BIN or reinstall" >&2
+  exit 1
+fi
+
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  cmd="$(printf '%q %q %q' "$bin" "$landscape" "$message")"
+
+  # Open a new Terminal window/tab and run Lodge there.
+  # Fullscreen toggle may require Accessibility permission for "System Events".
+  osascript >/dev/null 2>&1 <<EOF || true
+tell application "Terminal"
+  activate
+  set w to (do script "$cmd")
+  try
+    set frontmost to true
+  end try
+end tell
+delay 0.6
+tell application "System Events"
+  tell process "Terminal"
+    set frontmost to true
+  end tell
+  keystroke "f" using {control down, command down}
+end tell
+EOF
+
+  exit 0
+fi
+
+if command -v gnome-terminal >/dev/null 2>&1; then
+  exec gnome-terminal --full-screen -- "$bin" "$landscape" "$message"
+fi
+
+exec "$bin" "$landscape" "$message"
+
