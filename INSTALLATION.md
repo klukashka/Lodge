@@ -13,6 +13,19 @@
     sudo dpkg -i <package-name>
     ```
 
+* ## macOS (.pkg)
+
+    1. Download `lodge-<version>.pkg` from the latest release (or build it: `make pkg VERSION=<version>`)
+
+    2. Install it. The package is not signed yet, so macOS may block a double-click
+       ("cannot be opened because it is from an unidentified developer"). Either right-click the file → **Open**,
+       or install from the terminal:
+    ```
+    sudo installer -pkg lodge-<version>.pkg -target /
+    ```
+
+    3. Run `lodge`
+
 * ## macOS (Homebrew)
 
     Lodge is packaged for Linux via `.deb`. The macOS equivalent is a Homebrew formula that:
@@ -80,6 +93,11 @@
     
 # Building your own package from the existing one:
 
+* ## macOS (.pkg)
+
+    Requires Xcode Command Line Tools. From the repository root run `make pkg VERSION=<version>`;
+    `lodge-<version>.pkg` appears in the repository root.
+
 * ## deb (Debian/Ubuntu)
 
     1. Make sure you have a `gcc` compiler and `debhelper` installed
@@ -90,12 +108,15 @@
     git clone https://github.com/klukashka/Lodge.git
     ```
 
-    3. Go into **deb/** folder of the project
-
-    4. Run the following to build a package
+    3. Run the following in the repository root to build a package
 
     ```
-    dpkg-buildpackage -us -uc
+    make deb
     ```
 
-    5. The built package will appear in the parent directory. To install it follow the *3rd* and *4th* steps of the guide above
+    4. The built `lodge_<version>_<arch>.deb` will appear in the repository root. To install it follow the *3rd* and *4th* steps of the guide above
+
+* ## Version
+
+    The version lives in the `VERSION` file and is used by the Makefile, the `.deb` and the `.pkg`.
+    To release: edit `VERSION`, commit, tag `v<version>` and push the tag — the GitHub workflow builds both packages and attaches them to the release.

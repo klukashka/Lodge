@@ -1,6 +1,6 @@
 # 🏕️Lodge
 
-**Lodge** is a library currently made only for **Debian/Ubuntu**. 
+**Lodge** is a small terminal library available for **macOS** (Apple Silicon and Intel) and **Debian/Ubuntu**. 
 Its main purpose is to give a rest to a user (probably after many hours of coding)
 
 ## 👀 Features
