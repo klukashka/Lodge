@@ -32,6 +32,7 @@ static volatile sig_atomic_t stop_looping = 0;  // set by the signal handler, po
 static volatile sig_atomic_t hangup = 0;        // terminal is gone (SIGHUP): skip the farewell
 static volatile sig_atomic_t fast_exit = 0;     // a second Ctrl+C: skip the farewell animation
 static volatile sig_atomic_t interrupts = 0;    // how many Ctrl+C / SIGTERM arrived
+static int g_demo = 0;  // LODGE_DEMO=1: a gust in every wind window and a jump in every fish window
 static volatile sig_atomic_t need_redraw = 0;   // SIGWINCH / SIGCONT: repaint everything from scratch
 
 // --------------------------------------------------
@@ -91,7 +92,7 @@ static void enter_screen() {
 
 void restore_screen() {
     if (screen_active) {
-        printf(TERM_MODES_OFF "\033[?1049l");
+        printf("\033[0m" TERM_MODES_OFF "\033[?1049l");
         fflush(stdout);
         screen_active = 0;
     }
@@ -226,15 +227,20 @@ static int size_ok() {
     return scr_cols >= PIC_W && scr_rows >= PIC_H;
 }
 
-// Paints `n` characters of `text` centered on `row`, clearing the rest of that row.
-static void draw_centered(const char *text, int n, int row) {
+// Paints `n` characters of `text` starting at (`row`, `col`), clearing the rest of that row.
+static void draw_at(const char *text, int n, int row, int col) {
     int len = (int)strlen(text);
-    int shown = min(min(n, len), scr_cols);
-    int left = (scr_cols - min(len, scr_cols)) / 2;
+    int shown = min(min(n, len), scr_cols > col ? scr_cols - col : 0);
     fb_move(row, 0);
     fb_str("\033[2K");
-    fb_move(row, left);
+    fb_move(row, col);
     fb_put(text, (size_t)shown);
+}
+
+// Same, centered on `row`.
+static void draw_centered(const char *text, int n, int row) {
+    int len = (int)strlen(text);
+    draw_at(text, n, row, (scr_cols - min(len, scr_cols)) / 2);
 }
 
 // Shown instead of the scene while the terminal is smaller than the picture; vanishes by itself once it fits.
@@ -420,10 +426,12 @@ static void build_background() {
     build_side(ox, oy, +1, scr_cols - ox - PIC_W);
 }
 
+static double g_star_f = 1.0;  // 0 = broad daylight, 1 = night: how many of the stars are out
+
 // Calm night sky: most stars are steady dots, one in eight slowly brightens for two seconds every 10-16 seconds,
 // a few are bright and steady. Nothing blinks out, and the stars do not twinkle in unison.
 static char star_char(int sx, int sy, long t_ms) {
-    if (hash2(sx, sy, 41) % 100 >= 4) {
+    if (hash2(sx, sy, 41) % 1000 >= (unsigned)(40.0 * g_star_f)) {
         return ' ';
     }
     unsigned kind = hash2(sx, sy, 42) % 16;
@@ -440,15 +448,16 @@ static char star_char(int sx, int sy, long t_ms) {
 #define FISH_WINDOW_MS 9000
 #define FISH_EVENT_MS 2300
 #define FISH_DX 14           // how far to the right a jump carries the fish
-#define FISH_TAIL "><(((o>"  // the fish; ASCII only, so one byte is one cell
+#define FISH_RIGHT "><(((o>"  // the fish swimming right; ASCII only, so one byte is one cell
+#define FISH_LEFT "<o)))><"   // and the mirrored one
 
-typedef struct { int active; long dt; int x0; int row0; int h; } Fish;
+typedef struct { int active; long dt; int x0; int row0; int h; int dir; } Fish;
 
 static Fish fish_at(long t_ms) {
-    Fish f = {0, 0, 0, 0, 3};
+    Fish f = {0, 0, 0, 0, 3, 1};
     int k = (int)(t_ms / FISH_WINDOW_MS);
-    if (hash2(k, 0, 51) % 100 >= 30) {
-        return f;  // only 3 windows out of 10 have a jump
+    if (!g_demo && hash2(k, 0, 51) % 100 >= 15) {
+        return f;  // only 15 windows out of 100 have a jump: about one a minute
     }
     long start = (long)k * FISH_WINDOW_MS + 1500 + (long)(hash2(k, 0, 52) % 5500);
     long dt = t_ms - start;
@@ -457,22 +466,27 @@ static Fish fish_at(long t_ms) {
     }
     f.active = 1;
     f.dt = dt;
+    f.dir = hash2(k, 0, 55) % 2 ? 1 : -1;                   // left or right, equally likely
     f.row0 = RIVER_ROW_LAST - (int)(hash2(k, 0, 54) % 2);  // takes off from one of the two lower river rows
 
     // A tall jump needs open grass on one side of the picture, so the fish never crosses the hut and the trees.
+    // `lo..hi` is where the jump may start counted as if it went right; a left jump starts FISH_DX further right.
     int ox = (scr_cols - PIC_W) / 2, room = FISH_DX + 12;
     int left_ok = ox >= room + 6, right_ok = scr_cols - ox - PIC_W >= room + 6;
     unsigned pick = hash2(k, 0, 53);
+    int base;
     if (left_ok || right_ok) {
         int use_left = left_ok && (!right_ok || pick % 2 == 0);
-        int span = (use_left ? ox : scr_cols - ox - PIC_W) - room - 3;
-        int off = 3 + (int)((pick / 2) % (unsigned)(span > 0 ? span : 1));
-        f.x0 = use_left ? off + 3 : ox + PIC_W + off;
+        int region_start = use_left ? 3 : ox + PIC_W + 3;
+        int region_end = use_left ? ox - 3 : scr_cols - 3;
+        int span = region_end - region_start - FISH_DX - 8;
+        base = region_start + 4 + (int)((pick / 2) % (unsigned)(span > 0 ? span : 1));
         f.h = 6;
     } else {
-        f.x0 = 6 + (int)(pick % (unsigned)(scr_cols > 36 ? scr_cols - 30 : 6));
-        f.h = 3;  // narrow screen: keep the old low jump
+        base = 6 + (int)(pick % (unsigned)(scr_cols > 36 + FISH_DX ? scr_cols - 30 - FISH_DX : 6));
+        f.h = 3;  // narrow screen: keep the low jump
     }
+    f.x0 = f.dir > 0 ? base : base + FISH_DX;
     return f;
 }
 
@@ -480,7 +494,7 @@ static Fish fish_at(long t_ms) {
 // knock: 0 = plain, 1 = clear one cell of margin around it on its row, 2 = also clear the rows above and below.
 typedef struct { int x, y; const char *s; int knock; } Sprite;
 
-static int arc_x(const Fish *f, double v) { return f->x0 + (int)(FISH_DX * v + 0.5); }
+static int arc_x(const Fish *f, double v) { return f->x0 + f->dir * (int)(FISH_DX * v + 0.5); }
 static int arc_y(const Fish *f, double v) { return f->row0 - (int)(f->h * 4.0 * v * (1.0 - v) + 0.5); }
 
 static int add_centered(Sprite *out, int n, int cx, int y, const char *s, int knock) {
@@ -495,7 +509,7 @@ static int fish_sprites(const Fish *f, int oy, Sprite *out) {
         return 0;
     }
     static const char *const rings[] = {".o.", "(o)", "( o )", "(   )"};
-    int land_x = f->x0 + FISH_DX;
+    int land_x = f->x0 + f->dir * FISH_DX;
 
     if (f->dt < 1000) {
         n = add_centered(out, n, f->x0, oy + f->row0, rings[f->dt / 250], 1);
@@ -512,16 +526,16 @@ static int fish_sprites(const Fish *f, int oy, Sprite *out) {
         for (int d = 0; d < 3; ++d) {  // drops left behind along the path
             double vd = v - 0.07 * (d + 1);
             if (vd > 0.0) {
-                n = add_centered(out, n, arc_x(f, vd) - 4, oy + arc_y(f, vd) + 1, drops[d], 0);
+                n = add_centered(out, n, arc_x(f, vd) - f->dir * 4, oy + arc_y(f, vd) + 1, drops[d], 0);
             }
         }
-        n = add_centered(out, n, arc_x(f, v), oy + arc_y(f, v), FISH_TAIL, 0);
+        n = add_centered(out, n, arc_x(f, v), oy + arc_y(f, v), f->dir > 0 ? FISH_RIGHT : FISH_LEFT, 0);
     }
     return n;
 }
 
 // ---------------------------------------------------
-// Wind. A gust lasts a few seconds and blows to one side; its strength rises and falls smoothly (smoothstep ramps),
+// Wind. A gust lasts a few seconds and always blows to the same side during one run; its strength rises and falls smoothly (smoothstep ramps),
 // so nothing ever jumps. Between gusts the air is still. Everything that sways reads wind_at(), which returns
 // a signed strength in [-1, 1] (the sign is the direction), so leaves and clouds can use it later too.
 
@@ -537,9 +551,19 @@ static double tri(double x) {
     return f < 0.5 ? 4.0 * f - 1.0 : 3.0 - 4.0 * f;
 }
 
+static int g_wind_dir = 1;  // +1 blows to the right, -1 to the left; chosen once per run, never changes after
+
+static void wind_init() {
+    unsigned seed = (unsigned)time(NULL) * 2654435761u ^ (unsigned)getpid();
+    g_wind_dir = (seed >> 16) % 2 ? 1 : -1;
+    const char *d = getenv("LODGE_WIND_DIR");  // "left" or "right", for testing
+    if (d != NULL && (d[0] == 'l' || d[0] == 'L')) g_wind_dir = -1;
+    if (d != NULL && (d[0] == 'r' || d[0] == 'R')) g_wind_dir = 1;
+}
+
 static double wind_at(long t_ms) {
     int k = (int)(t_ms / WIND_WINDOW_MS);
-    if (hash2(k, 0, 61) % 100 >= 30) {
+    if (!g_demo && hash2(k, 0, 61) % 100 >= 30) {
         return 0.0;  // a calm window (3 windows out of 10 have a gust)
     }
     long start = (long)k * WIND_WINDOW_MS + 1500 + (long)(hash2(k, 0, 62) % 3000);
@@ -557,7 +581,7 @@ static double wind_at(long t_ms) {
     e = e * e * (3.0 - 2.0 * e);
     double amp = 0.6 + 0.4 * (double)(hash2(k, 0, 64) % 100) / 100.0;
     double gust = 1.0 + 0.12 * tri((double)t_ms / 2300.0);
-    double w = (hash2(k, 0, 65) % 2 ? 1.0 : -1.0) * e * amp * gust;
+    double w = g_wind_dir * e * amp * gust;
     return w > 1.0 ? 1.0 : (w < -1.0 ? -1.0 : w);
 }
 
@@ -613,6 +637,177 @@ static void apply_wind(char *row, int y, int sy, int ox, double w, long t_ms) {
     }
 }
 
+// ---------------------------------------------------
+// Sky. The real clock decides the time of day; the day length follows the season (northern hemisphere unless
+// LODGE_HEMISPHERE=south). The sun and the moon cross the sky along an arc and are painted on sky cells only, so
+// mountains and trees hide them at rise and set. Debugging: LODGE_AT="YYYY-MM-DD HH:MM" starts the clock at that
+// moment, LODGE_TIME_SCALE=600 makes it run 600 times faster.
+
+static double g_epoch0 = 0.0, g_scale = 1.0;
+static int g_south = 0;
+
+static void sky_init() {
+    g_epoch0 = (double)time(NULL);
+    const char *at = getenv("LODGE_AT");
+    int y, mo, d, h = 12, mi = 0;
+    if (at != NULL && sscanf(at, "%d-%d-%d %d:%d", &y, &mo, &d, &h, &mi) >= 3) {
+        struct tm tmv;
+        memset(&tmv, 0, sizeof tmv);
+        tmv.tm_year = y - 1900;
+        tmv.tm_mon = mo - 1;
+        tmv.tm_mday = d;
+        tmv.tm_hour = h;
+        tmv.tm_min = mi;
+        tmv.tm_isdst = -1;
+        time_t e = mktime(&tmv);
+        if (e != (time_t)-1) g_epoch0 = (double)e;
+    }
+    const char *sc = getenv("LODGE_TIME_SCALE");
+    if (sc != NULL && atof(sc) > 0.0) g_scale = atof(sc);
+    const char *hs = getenv("LODGE_HEMISPHERE");
+    g_south = hs != NULL && (hs[0] == 's' || hs[0] == 'S');
+    g_demo = getenv("LODGE_DEMO") != NULL;
+}
+
+static double wrap(double x, double m) {
+    x -= (double)(long)(x / m) * m;
+    return x < 0 ? x + m : x;
+}
+
+typedef struct { double hour, rise, set, phase; } SkyClock;
+
+static void sky_clock(long t_ms, SkyClock *c) {
+    double e = g_epoch0 + (double)t_ms / 1000.0 * g_scale;
+    time_t tt = (time_t)e;
+    struct tm tmv;
+    localtime_r(&tt, &tmv);
+    c->hour = tmv.tm_hour + tmv.tm_min / 60.0 + tmv.tm_sec / 3600.0;
+    double y = tri(((double)tmv.tm_yday - 172.0) / 365.0);      // -1 at the June solstice, +1 in December
+    double summer = -(1.5 * y - 0.5 * y * y * y);               // smoothed: +1 in June, -1 in December
+    if (g_south) summer = -summer;
+    double len = 12.0 + 4.0 * summer;                           // 8 h in midwinter, 16 h in midsummer
+    c->rise = 12.5 - len / 2.0;
+    c->set = 12.5 + len / 2.0;
+    c->phase = wrap((e - 947182440.0) / 86400.0, 29.530588853) / 29.530588853;  // 0 = new moon, 0.5 = full
+}
+
+// Share of the stars that are out: all of them at night, none by day, fading in and out around dusk and dawn.
+static double star_factor(const SkyClock *c) {
+    double h = c->hour;
+    if (h < c->rise - 0.75 || h > c->set + 0.75) return 1.0;
+    if (h < c->rise + 0.25) return 1.0 - (h - (c->rise - 0.75));
+    if (h > c->set - 0.25) return h - (c->set - 0.25);
+    return 0.0;
+}
+
+typedef struct { int x, y; const char *s; int bold; } SkyLine;
+
+static const char *const CLOUDS[3][3] = {
+    {"    .--.    ", " .-(    ).  ", "(___.__)__) "},
+    {"   .--.  .-.    ", " .(    )(   ).  ", "(__________.__) "},
+    {"   .-.    ", " .(   ).  ", "(_.___)_) "},
+};
+
+// Collects the lines of everything that hangs in the sky: sun, moon, clouds.
+static int sky_sprites(long t_ms, int oy, double wind, const SkyClock *c, SkyLine *out) {
+    int n = 0;
+    int horizon = oy + 11, top = 2;
+    if (horizon < top + 3) horizon = top + 3;
+
+    if (c->hour >= c->rise && c->hour <= c->set) {  // sun: a solid disc with eight breathing rays
+        static char sun[11][22];
+        static const char *const core[3] = {" .@@@@@. ", "(@@@@@@@)", " `@@@@@' "};  // a solid disc: no pupil, so no eye
+        // ray i: where it starts (dx, dy from the centre), the step per link, and its character
+        static const struct { int dx, dy, sx, sy; char ch; } rays[8] = {
+            {6, 0, 2, 0, '-'},   {-6, 0, -2, 0, '-'}, {0, -3, 0, -1, '|'},  {0, 3, 0, 1, '|'},
+            {6, -2, 2, -1, '/'}, {-6, 2, -2, 1, '/'}, {-6, -2, -2, -1, '\\'}, {6, 2, 2, 1, '\\'},
+        };
+        // The rays get shorter on a low screen so that the whole sun stays above the central peaks at noon.
+        int links = (oy - 4) / 2;
+        links = links < 1 ? 1 : (links > 3 ? 3 : links);
+        int mid = 2 + links, rows = 2 * mid + 1;  // row of the disc centre, number of rows of the sprite
+        for (int r = 0; r < 11; ++r) {
+            memset(sun[r], ' ', 21);
+            sun[r][21] = '\0';
+        }
+        for (int k = 0; k < 3; ++k) memcpy(&sun[mid - 1 + k][6], core[k], 9);
+        // The rays breathe: each one slowly grows and fades back (a cycle of about 7 seconds, every ray in its own
+        // phase). The growing tip is a dot that turns into the full ray character, so even the shortest sun on a low
+        // screen (one link per ray) visibly breathes, and the sun never flickers.
+        for (int i = 0; i < 8; ++i) {
+            double y = tri((double)t_ms / 7000.0 + (double)i / 8.0);
+            double w = 0.5 - 0.5 * (1.5 * y - 0.5 * y * y * y);  // smooth 0..1
+            double reach = w * links;                             // how many links are lit
+            for (int k = 0; k < links; ++k) {
+                double frac = reach - k;
+                if (k == 0 && frac < 0.25) frac = 0.25;           // the first link never disappears
+                if (frac < 0.25) break;
+                sun[mid + rays[i].dy + k * rays[i].sy][10 + rays[i].dx + k * rays[i].sx] = frac >= 0.7 ? rays[i].ch : '.';
+            }
+        }
+        double u = (c->hour - c->rise) / (c->set - c->rise);
+        int sun_top = mid;  // keeps the upper rays on the screen
+        int sun_horizon = horizon > sun_top + 3 ? horizon : sun_top + 3;
+        int cx = (int)(u * (scr_cols - 1));
+        int cy = sun_horizon - (int)(4.0 * u * (1.0 - u) * (sun_horizon - sun_top) + 0.5);
+        for (int r = 0; r < rows; ++r) out[n++] = (SkyLine){cx - 10, cy - mid + r, sun[r], 0};
+    }
+
+    // The moon: a full 11x5 disc with an outline and craters, drawn bold (the brightest a monochrome terminal can
+    // make it). It is up for the whole night, rising at sunset and setting at sunrise, and stays high for most of it.
+    static const char *const moon[5] = {"  .-\"\"\"-.  ", " /. o. O.\\ ", "|.o .O o. |", " \\o. o. O/ ", "  `-...-'  "};
+    double night_len = 24.0 - (c->set - c->rise);
+    double dn = wrap(c->hour - c->set, 24.0);
+    if (dn <= night_len) {
+        double u = dn / night_len;
+        double a = 2.0 * u - 1.0;
+        double alt = 1.0 - a * a * a * a;  // a flat arc: high for most of the night, down at the horizon at both ends
+        int moon_horizon = oy + 5, moon_top = 2;
+        if (moon_horizon < moon_top + 3) moon_horizon = moon_top + 3;
+        int cx = (int)(u * (scr_cols - 1));
+        int cy = moon_horizon - (int)(alt * (moon_horizon - moon_top) + 0.5);
+        for (int r = 0; r < 5; ++r) out[n++] = (SkyLine){cx - 5, cy - 2 + r, moon[r], 1};
+    }
+
+    // A gust only speeds the clouds up (smoothly, along the wind): the extra distance is the integral of the gust.
+    static long last_t = 0;
+    static double last_w = 0.0, cloud_boost = 0.0;
+    if (t_ms > last_t) {
+        cloud_boost += 2.5 * 0.5 * (wabs(last_w) + wabs(wind)) * (double)(t_ms - last_t) / 1000.0;
+        last_t = t_ms;
+        last_w = wind;
+    }
+
+    int clouds = 2 + (scr_cols >= 140) + (scr_cols >= 220);
+    int span = scr_cols + 48;
+    int avail = oy + 5 > 1 ? oy + 5 : 1;
+    for (int i = 0; i < clouds; ++i) {
+        const char *const *shape = CLOUDS[hash2(i, 0, 81) % 3];
+        double speed = 0.4 + (double)(hash2(i, 0, 82) % 35) / 100.0;  // cells per second
+        double travel = speed * (double)t_ms / 1000.0 + cloud_boost;
+        double x = wrap((double)(hash2(i, 0, 83) % (unsigned)span) + g_wind_dir * travel, (double)span);
+        int cx = (int)x - 24;
+        int cy = 1 + (i * avail) / clouds + (int)(hash2(i, 0, 84) % 2);
+        for (int r = 0; r < 3; ++r) out[n++] = (SkyLine){cx, cy + r, shape[r], 0};
+    }
+    return n;
+}
+
+// Paints one sprite line on sky cells only (mountains and trees stay in front). The span between the first and the
+// last visible character is opaque, so a cloud also hides the stars behind it.
+static void paint_sky_line(char *row, unsigned char *bold, int y, const SkyLine *l) {
+    int first = 0, last = (int)strlen(l->s) - 1;
+    while (first <= last && l->s[first] == ' ') ++first;
+    while (last >= first && l->s[last] == ' ') --last;
+    for (int j = first; j <= last; ++j) {
+        int x = l->x + j;
+        if (x >= 0 && x < scr_cols && skym[(size_t)y * scr_cols + x]) {
+            row[x] = l->s[j];
+            bold[x] = (unsigned char)l->bold;
+        }
+    }
+}
+
 // Paints the whole screen: static background, twinkling stars, smoke and flowing river.
 static void draw_scene(long t_ms) {
     if (bg_rows != scr_rows || bg_cols != scr_cols) {
@@ -623,16 +818,23 @@ static void draw_scene(long t_ms) {
     long river_step = t_ms / 350;
     int river_size = RIVER_ROW_LAST - RIVER_ROW_FIRST + 1;
     char *row = malloc((size_t)scr_cols);
-    if (row == NULL) {
+    unsigned char *bold = malloc((size_t)scr_cols);
+    if (row == NULL || bold == NULL) {
         exit(1);
     }
     double wind = wind_at(t_ms);
+    SkyClock clock;
+    sky_clock(t_ms, &clock);
+    g_star_f = star_factor(&clock);
+    SkyLine sky_lines[40];
+    int n_sky = sky_sprites(t_ms, oy, wind, &clock, sky_lines);
     Fish fish = fish_at(t_ms);
     Sprite sprites[MAX_SPRITES];
     int n_sprites = fish_sprites(&fish, oy, sprites);
 
     for (int y = 0; y < scr_rows; ++y) {
         int sy = y - oy;
+        memset(bold, 0, (size_t)scr_cols);
         if (sy >= RIVER_ROW_FIRST && sy <= RIVER_ROW_LAST) {
             int i = sy - RIVER_ROW_FIRST;
             long shift = river_step * (min(i, river_size - i - 1) + 1);
@@ -655,6 +857,9 @@ static void draw_scene(long t_ms) {
             if (wabs(wind) > 0.05) {
                 apply_wind(row, y, sy, ox, wind, t_ms);
             }
+            for (int k = 0; k < n_sky; ++k) {
+                if (sky_lines[k].y == y) paint_sky_line(row, bold, y, &sky_lines[k]);
+            }
         }
         for (int k = 0; k < n_sprites; ++k) {
             const Sprite *sp = &sprites[k];
@@ -673,9 +878,17 @@ static void draw_scene(long t_ms) {
             }
         }
         fb_move(y, 0);
-        fb_put(row, (size_t)scr_cols);
+        for (int x = 0; x < scr_cols;) {  // write the row in runs of equal weight
+            int x2 = x;
+            while (x2 < scr_cols && bold[x2] == bold[x]) ++x2;
+            if (bold[x]) fb_str("\033[1m");
+            fb_put(row + x, (size_t)(x2 - x));
+            if (bold[x]) fb_str("\033[22m");
+            x = x2;
+        }
     }
     free(row);
+    free(bold);
 }
 
 // ---------------------------------------------------
@@ -852,6 +1065,8 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     pad_picture(LINES);
+    sky_init();
+    wind_init();
 
     enter_screen();
     if (getenv("LODGE_WAIT_RESIZE") != NULL) {

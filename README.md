@@ -12,6 +12,15 @@ Press `lodge` to take a rest in a lodge (if you are a tired wanderer, of course)
 
 To be able to take rest immediately just follow [INSTALLATION.md](INSTALLATION.md)
 
+## ⚙️ Options (environment variables)
+
+- `LODGE_NEW_WINDOW=1` — open a separate full-screen terminal window instead of using the current one.
+- `LODGE_HEMISPHERE=south` — mirror the seasons (day length) for the southern hemisphere.
+- `LODGE_WIND_DIR=left|right` — force the wind direction (by default it is picked once per launch and never changes).
+- `LODGE_DEMO=1` — a wind gust and a fish jump in every time window, to see them without waiting.
+- `LODGE_AT="YYYY-MM-DD HH:MM"` — start the sky clock at that moment (try `LODGE_AT="2026-12-21 22:00" lodge`).
+- `LODGE_TIME_SCALE=600` — run the sky clock 600 times faster, to watch a whole day pass.
+
 ## 👋 Contributing
 
 If you're a developer, you can make a direct impact by contributing code. Clone the repository, make your changes, and
