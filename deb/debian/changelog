@@ -1,5 +1,14 @@
+lodge (0.2.1) stable; urgency=low
+
+  * Runs in the current terminal like sl and fits any terminal size
+  * Generated scene around the hand-drawn picture: sky, mountains, forest, river
+  * Real-clock day and night with sun, moon and drifting clouds
+  * Wind, a jumping fish, calm stars; Ctrl+C is the only key
+
+ -- klukashka <klukin0202@yandex.ru>  Sun, 15 Nov 2026 22:30:00 +0000
+
 lodge (0.1.3) stable; urgency=low
 
   * Added freezing and full-screen
 
--- klukashka <klukin0202@yandex.ru> Fri, 22 Nov 2024 17:38:00 +0000
+ -- klukashka <klukin0202@yandex.ru>  Fri, 22 Nov 2024 17:38:00 +0000

@@ -4,5 +4,5 @@ Priority: optional
 Maintainer: klukashka <klukin0202@yandex.ru>
 
 Package: lodge
-Architecture: amd64
+Architecture: any
 Description: Lodge. A place for wanderers to rest.

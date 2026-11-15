@@ -1,0 +1,79 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  check-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag must match VERSION
+        run: test "v$(cat VERSION)" = "${GITHUB_REF_NAME}"
+
+  macos:
+    needs: check-version
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: make pkg
+      - uses: actions/upload-artifact@v4
+        with: { name: pkg, path: "lodge-*.pkg" }
+
+  deb:
+    needs: check-version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y build-essential debhelper
+      - run: make deb
+      - uses: actions/upload-artifact@v4
+        with: { name: deb, path: "lodge_*.deb" }
+
+  publish:
+    needs: [macos, deb]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { path: dist, merge-multiple: true }
+      - uses: softprops/action-gh-release@v2
+        with: { files: "dist/*" }
+
+  # Updates the Homebrew tap (klukashka/homebrew-lodge) so `brew upgrade lodge` sees the new version.
+  # Needs a repository secret TAP_TOKEN: a personal access token with write access to the tap repository.
+  # Without the secret this job does nothing and the release itself is not affected.
+  tap:
+    needs: publish
+    runs-on: ubuntu-latest
+    env:
+      TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check out the tap
+        if: env.TAP_TOKEN != ''
+        uses: actions/checkout@v4
+        with:
+          repository: klukashka/homebrew-lodge
+          token: ${{ env.TAP_TOKEN }}
+          path: tap
+      - name: Write the formula for this tag
+        if: env.TAP_TOKEN != ''
+        run: |
+          url="https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/${GITHUB_REF_NAME}.tar.gz"
+          sha="$(curl -fsSL "$url" | sha256sum | cut -d' ' -f1)"
+          mkdir -p tap/Formula
+          sed -e "s|^  url .*|  url \"${url}\"|" -e "s|^  sha256 .*|  sha256 \"${sha}\"|" Formula/lodge.rb > tap/Formula/lodge.rb
+          cat tap/Formula/lodge.rb
+      - name: Commit and push the tap
+        if: env.TAP_TOKEN != ''
+        working-directory: tap
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/lodge.rb
+          git diff --cached --quiet || git commit -m "lodge ${GITHUB_REF_NAME#v}"
+          git push
