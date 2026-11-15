@@ -13,6 +13,10 @@ struct termios oldt, newt;
 
 #define min(x, y) ((x) < (y) ? (x) : (y))
 
+#ifndef LODGE_VERSION
+#define LODGE_VERSION "dev"
+#endif
+
 char lines[LINES][LINE_LENGTH];
 char message[1024][LINE_LENGTH];
 char* landscape_file;
@@ -23,6 +27,14 @@ pthread_t tid[2];
 pthread_mutex_t print_mutex;
 
 // --------------------------------------------------
+
+static void print_help(const char *argv0) {
+    printf("Lodge %s\n\n", LODGE_VERSION);
+    printf("Usage:\n");
+    printf("  %s <landscape_file> <message_file>\n", argv0);
+    printf("  %s --help\n", argv0);
+    printf("  %s --version\n", argv0);
+}
 
 void disable_input() {
     tcgetattr(STDIN_FILENO, &oldt);  // Get the current terminal settings
@@ -198,9 +210,16 @@ void handle_signal(int signal) {
 }
 
 int main(int argc, char *argv[]) {
+    if (argc == 2 && (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0)) {
+        print_help(argv[0]);
+        return 0;
+    }
+    if (argc == 2 && (strcmp(argv[1], "--version") == 0 || strcmp(argv[1], "-V") == 0)) {
+        printf("%s\n", LODGE_VERSION);
+        return 0;
+    }
     if (argc != 3) {
-        printf("%d - cur number of arguments\n", argc);
-        printf("Usage: %s <landscape_file> <message_file>\n", argv[0]);
+        print_help(argv[0]);
         return 1;
     }
 
