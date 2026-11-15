@@ -420,7 +420,7 @@ static void build_background() {
     build_side(ox, oy, +1, scr_cols - ox - PIC_W);
 }
 
-// Calm night sky: most stars are steady dots, one in eight slowly brightens for a second every 5-8 seconds,
+// Calm night sky: most stars are steady dots, one in eight slowly brightens for two seconds every 10-16 seconds,
 // a few are bright and steady. Nothing blinks out, and the stars do not twinkle in unison.
 static char star_char(int sx, int sy, long t_ms) {
     if (hash2(sx, sy, 41) % 100 >= 4) {
@@ -428,9 +428,9 @@ static char star_char(int sx, int sy, long t_ms) {
     }
     unsigned kind = hash2(sx, sy, 42) % 16;
     if (kind < 2) {
-        long period = 5000 + (long)(hash2(sx, sy, 43) % 4) * 1000;
-        long at = (t_ms + (long)(hash2(sx, sy, 44) % 8000)) % period;
-        return at < 1000 ? '+' : '.';
+        long period = 10000 + (long)(hash2(sx, sy, 43) % 4) * 2000;
+        long at = (t_ms + (long)(hash2(sx, sy, 44) % 16000)) % period;
+        return at < 2000 ? '+' : '.';
     }
     return kind == 2 ? '*' : '.';
 }
@@ -447,8 +447,8 @@ typedef struct { int active; long dt; int x0; int row0; int h; } Fish;
 static Fish fish_at(long t_ms) {
     Fish f = {0, 0, 0, 0, 3};
     int k = (int)(t_ms / FISH_WINDOW_MS);
-    if (hash2(k, 0, 51) % 100 >= 60) {
-        return f;  // not every window has a jump
+    if (hash2(k, 0, 51) % 100 >= 30) {
+        return f;  // only 3 windows out of 10 have a jump
     }
     long start = (long)k * FISH_WINDOW_MS + 1500 + (long)(hash2(k, 0, 52) % 5500);
     long dt = t_ms - start;
@@ -539,8 +539,8 @@ static double tri(double x) {
 
 static double wind_at(long t_ms) {
     int k = (int)(t_ms / WIND_WINDOW_MS);
-    if (hash2(k, 0, 61) % 100 >= 60) {
-        return 0.0;  // a calm window
+    if (hash2(k, 0, 61) % 100 >= 30) {
+        return 0.0;  // a calm window (3 windows out of 10 have a gust)
     }
     long start = (long)k * WIND_WINDOW_MS + 1500 + (long)(hash2(k, 0, 62) % 3000);
     long dur = 4000 + (long)(hash2(k, 0, 63) % 5000);
