@@ -7,8 +7,12 @@ CFLAGS ?= -O2 -Wall -Wextra
 VERSION ?= $(shell cat VERSION)
 
 # macOS: build a universal (Apple Silicon + Intel) binary so one package fits every Mac.
+# Homebrew builds for the user's own machine and passes UNIVERSAL=0.
+UNIVERSAL ?= 1
 ifeq ($(shell uname -s),Darwin)
+ifeq ($(UNIVERSAL),1)
 CFLAGS += -arch arm64 -arch x86_64
+endif
 endif
 
 BIN := lodge

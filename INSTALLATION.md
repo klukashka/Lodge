@@ -26,22 +26,10 @@
 
     3. Run `lodge`
 
-* ## macOS (Homebrew)
-
-    Lodge is packaged for Linux via `.deb`. The macOS equivalent is a Homebrew formula that:
-    - installs the compiled binary
-    - installs the bundled text assets into `share/lodge/texts`
-    - exposes `lodge` as the user-facing command (opens Terminal and runs Lodge)
-
-    1. Install via Homebrew (recommended: via a tap)
-
-    Homebrew requires third-party formulae to live in a **tap** (a separate Git repo), so you can’t `brew install ./Formula/lodge.rb` directly.
-
-    As the maintainer, you publish a tap once, then users install with:
+* ## macOS and Linux (Homebrew)
 
     ```
-    brew tap <user-or-org>/lodge
-    brew install lodge
+    brew install klukashka/lodge/lodge
     ```
 
     Then run:
@@ -50,48 +38,45 @@
     lodge
     ```
 
-    Notes:
-    - `lodge` runs right in your current terminal and takes over its whole screen, like `sl`.
-    - All keys are ignored except **Ctrl+C**: it prints the farewell message and returns you to the shell. (Terminal.app reserves Cmd+C for “Copy”, so it never reaches the program.)
-    - Prefer a separate window? Run `LODGE_NEW_WINDOW=1 lodge`: it opens a new full-screen Terminal window and closes it when you quit. Switching to full screen needs the Accessibility permission for “System Events” (macOS asks on first run); without it the window is just stretched over the desktop.
+    Update to the latest release at any time, or remove it:
 
-    2. Build and install locally (without Homebrew):
+    ```
+    brew upgrade lodge
+    brew uninstall lodge
+    ```
+
+    Notes:
+    - Homebrew builds Lodge from the sources of the release, so the Xcode Command Line Tools (macOS) or a C compiler
+      (Linux) must be installed. `brew install` asks for them if they are missing.
+    - `lodge` runs right in your current terminal and takes over its whole screen, like `sl`.
+    - All keys are ignored except **Ctrl+C**: it prints the farewell message and returns you to the shell; press it
+      twice to leave at once. (Terminal.app reserves Cmd+C for “Copy”, so it never reaches the program.)
+    - Prefer a separate window? Run `LODGE_NEW_WINDOW=1 lodge`: it opens a new full-screen Terminal window and closes
+      it when you quit. Switching to full screen needs the Accessibility permission for “System Events”.
+
+* ## Build and install locally (without Homebrew)
 
     ```
     make
     sudo make install
     ```
 
-    Then run:
+    Then run `lodge`.
 
-    ```
-    lodge
-    ```
+* ## For maintainers: publishing a release
 
-    3. Publish via Homebrew (maintainers)
+    1. Raise the number in `VERSION`, add an entry to `deb/debian/changelog`, commit.
+    2. Tag it and push the tag: `git tag v<version> && git push origin v<version>`.
+       The GitHub workflow builds the `.pkg` and the `.deb`, attaches them to the release and updates the Homebrew tap.
+    3. One-time setup of the tap:
+       - create an empty public repository `klukashka/homebrew-lodge` (Homebrew requires the `homebrew-` prefix);
+       - create a personal access token (fine-grained, write access to *Contents* of that repository only);
+       - add it to the Lodge repository as the secret `TAP_TOKEN` (Settings → Secrets and variables → Actions).
 
-    Create a tap repository (common naming: `homebrew-lodge`), add the formula, and push it:
+       `Formula/lodge.rb` in this repository is the template: on every tag the workflow copies it to the tap and fills
+       in the URL and the checksum of the tagged source archive. Without the secret the tap step is skipped.
 
-    - Create the tap repo on GitHub: `<user-or-org>/homebrew-lodge`
-    - Locally:
 
-    ```
-    brew tap-new <user-or-org>/lodge
-    ```
-
-    - Copy `Formula/lodge.rb` into the newly created tap repo as `Formula/lodge.rb`
-    - Commit + push the tap repo
-
-    Notes:
-    - The **tap’s** `Formula/lodge.rb` should use a **GitHub release tarball** `url` + `sha256` (stable). In this repo, `Formula/lodge.rb` is a template: update the version + SHA when you cut a new release.
-    - You can also keep `head` for `brew install --HEAD lodge` (builds from `main`).
-
-    Users will then be able to install with:
-
-    ```
-    brew install <tap>/lodge
-    ```
-    
 # Building your own package from the existing one:
 
 * ## macOS (.pkg)

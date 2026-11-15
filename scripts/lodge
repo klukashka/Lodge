@@ -1,7 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-prefix="${LODGE_PREFIX:-/usr/local}"
+# Find where Lodge is installed from the real location of this script (following symlinks: Homebrew links
+# bin/lodge into its own prefix), so the same script works from /usr/local, a Homebrew Cellar or anywhere else.
+src="${BASH_SOURCE[0]}"
+while [[ -L "$src" ]]; do
+  dir="$(cd -P "$(dirname "$src")" && pwd)"
+  src="$(readlink "$src")"
+  [[ "$src" != /* ]] && src="$dir/$src"
+done
+self_dir="$(cd -P "$(dirname "$src")" && pwd)"
+
+prefix="${LODGE_PREFIX:-$(dirname "$self_dir")}"
 bin="${LODGE_BIN:-$prefix/bin/lodge-bin}"
 texts_dir="${LODGE_TEXTS_DIR:-$prefix/share/lodge/texts}"
 
