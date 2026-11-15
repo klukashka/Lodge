@@ -14,27 +14,70 @@ if [[ ! -x "$bin" ]]; then
   exit 1
 fi
 
-if [[ "$(uname -s)" == "Darwin" ]]; then
-  cmd="$(printf '%q %q %q' "$bin" "$landscape" "$message")"
+# Default (like `sl`): run right here, taking over the current terminal until Ctrl+C.
+if [[ "${LODGE_NEW_WINDOW:-0}" != "1" ]]; then
+  exec "$bin" "$landscape" "$message"
+fi
 
-  # Open a new Terminal window/tab and run Lodge there.
-  # Fullscreen toggle may require Accessibility permission for "System Events".
-  osascript >/dev/null 2>&1 <<EOF || true
+# Opt-in: LODGE_NEW_WINDOW=1 opens a separate full-screen terminal window instead.
+export LODGE_WAIT_RESIZE=1  # the window is resized after launch: let the program wait for the final size
+
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  # The trailing `exit` ends the shell once Lodge is done.
+  cmd="clear; LODGE_WAIT_RESIZE=1 $(printf '%q %q %q' "$bin" "$landscape" "$message"); exit"
+  # Escape for an AppleScript string literal.
+  cmd="${cmd//\\/\\\\}"
+  cmd="${cmd//\"/\\\"}"
+
+  # 1. open an empty Terminal window, 2. make it full screen (needs Accessibility permission for
+  # "System Events"; without it the window is just stretched over the desktop), 3. only then start
+  # Lodge, 4. close the window once Lodge has said goodbye and exited.
+  # Runs in the background so the calling shell is free right away.
+  nohup osascript >/dev/null 2>&1 <<EOF &
 tell application "Terminal"
   activate
-  set w to (do script "$cmd")
+  set t to do script ""
+  set wid to id of front window
+end tell
+
+set isFull to false
+try
+  tell application "System Events"
+    tell process "Terminal"
+      set frontmost to true
+      set value of attribute "AXFullScreen" of window 1 to true
+    end tell
+  end tell
+  set isFull to true
+end try
+
+if isFull then
+  delay 1.5
+else
   try
-    set frontmost to true
+    tell application "Finder" to set b to bounds of window of desktop
+    tell application "Terminal" to set bounds of window id wid to b
+  end try
+  delay 0.3
+end if
+
+tell application "Terminal"
+  do script "$cmd" in t
+  delay 1
+  repeat
+    try
+      if not (busy of t) then exit repeat
+    on error
+      exit repeat
+    end try
+    delay 0.3
+  end repeat
+  try
+    close window id wid saving no
   end try
 end tell
-delay 0.6
-tell application "System Events"
-  tell process "Terminal"
-    set frontmost to true
-  end tell
-  keystroke "f" using {control down, command down}
-end tell
 EOF
+  disown || true
 
   exit 0
 fi
@@ -44,4 +87,3 @@ if command -v gnome-terminal >/dev/null 2>&1; then
 fi
 
 exec "$bin" "$landscape" "$message"
-

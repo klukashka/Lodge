@@ -51,8 +51,9 @@
     ```
 
     Notes:
-    - The fullscreen behavior is implemented by sending the standard macOS fullscreen shortcut (Ctrl+Cmd+F) to Terminal.
-    - On some systems macOS may ask for Accessibility permission to allow “System Events” to send keystrokes. If you deny it, Lodge will still open in Terminal, just not forced fullscreen.
+    - `lodge` runs right in your current terminal and takes over its whole screen, like `sl`.
+    - All keys are ignored except **Ctrl+C**: it prints the farewell message and returns you to the shell. (Terminal.app reserves Cmd+C for “Copy”, so it never reaches the program.)
+    - Prefer a separate window? Run `LODGE_NEW_WINDOW=1 lodge`: it opens a new full-screen Terminal window and closes it when you quit. Switching to full screen needs the Accessibility permission for “System Events” (macOS asks on first run); without it the window is just stretched over the desktop.
 
     2. Build and install locally (without Homebrew):
 
