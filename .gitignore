@@ -4,3 +4,4 @@
 *.pkg
 deb/usr/games/lodge/
 /lodge
+.DS_Store

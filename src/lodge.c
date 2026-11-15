@@ -520,6 +520,99 @@ static int fish_sprites(const Fish *f, int oy, Sprite *out) {
     return n;
 }
 
+// ---------------------------------------------------
+// Wind. A gust lasts a few seconds and blows to one side; its strength rises and falls smoothly (smoothstep ramps),
+// so nothing ever jumps. Between gusts the air is still. Everything that sways reads wind_at(), which returns
+// a signed strength in [-1, 1] (the sign is the direction), so leaves and clouds can use it later too.
+
+#define WIND_WINDOW_MS 16000
+#define WIND_RAMP_MS 1500
+
+static double wabs(double x) { return x < 0 ? -x : x; }
+
+// Triangle wave in [-1, 1] with a period of 1.0 (no libm needed).
+static double tri(double x) {
+    double f = x - (double)(long)x;
+    if (f < 0) f += 1.0;
+    return f < 0.5 ? 4.0 * f - 1.0 : 3.0 - 4.0 * f;
+}
+
+static double wind_at(long t_ms) {
+    int k = (int)(t_ms / WIND_WINDOW_MS);
+    if (hash2(k, 0, 61) % 100 >= 60) {
+        return 0.0;  // a calm window
+    }
+    long start = (long)k * WIND_WINDOW_MS + 1500 + (long)(hash2(k, 0, 62) % 3000);
+    long dur = 4000 + (long)(hash2(k, 0, 63) % 5000);
+    long dt = t_ms - start;
+    if (dt < 0 || dt >= dur) {
+        return 0.0;
+    }
+    double e = 1.0;
+    if (dt < WIND_RAMP_MS) {
+        e = (double)dt / WIND_RAMP_MS;
+    } else if (dur - dt < WIND_RAMP_MS) {
+        e = (double)(dur - dt) / WIND_RAMP_MS;
+    }
+    e = e * e * (3.0 - 2.0 * e);
+    double amp = 0.6 + 0.4 * (double)(hash2(k, 0, 64) % 100) / 100.0;
+    double gust = 1.0 + 0.12 * tri((double)t_ms / 2300.0);
+    double w = (hash2(k, 0, 65) % 2 ? 1.0 : -1.0) * e * amp * gust;
+    return w > 1.0 ? 1.0 : (w < -1.0 ? -1.0 : w);
+}
+
+// The hand-drawn hut is never touched by the wind.
+static int in_hut(int sx, int sy) {
+    return sx >= 14 && sx <= 32 && sy >= 12 && sy <= 22;
+}
+
+// Bends the smoke and sways the foliage of one composed screen row. `row` is screen row y (scene row sy).
+static void apply_wind(char *row, int y, int sy, int ox, double w, long t_ms) {
+    int dir = w > 0 ? 1 : -1;
+    double amp = wabs(w);
+    size_t base = (size_t)y * scr_cols;
+
+    if (sy >= SMOKE_BEGIN && sy <= SMOKE_END) {  // smoke: the higher, the further it is blown
+        int off = (int)(w * (SMOKE_END - sy) + (w >= 0 ? 0.5 : -0.5));
+        if (off != 0) {
+            int xs[16], n = 0;
+            for (int x = ox + 14; x <= ox + 34 && x < scr_cols && n < 16; ++x) {
+                if (x >= 0 && (row[x] == '(' || row[x] == ')')) xs[n++] = x;
+            }
+            char glyph[16];
+            for (int i = 0; i < n; ++i) {
+                glyph[i] = row[xs[i]];
+                row[xs[i]] = skym[base + xs[i]] ? star_char(xs[i] - ox, sy, t_ms) : ' ';
+            }
+            for (int i = 0; i < n; ++i) {
+                int tx = xs[i] + off;
+                char under = (tx >= 0 && tx < scr_cols) ? bg[base + tx] : 'x';
+                int free_cell = tx >= 0 && tx < scr_cols && (under == ' ' || under == '(' || under == ')');
+                row[free_cell ? tx : xs[i]] = glyph[i];
+            }
+        }
+    }
+
+    if (sy >= 6 && sy <= 23) {  // foliage: pine cones hop between trunk cells, the quote marks lean with the wind
+        for (int x = dir > 0 ? 0 : scr_cols - 1; x >= 0 && x < scr_cols; x += dir) {
+            int sx = x - ox;
+            if (in_hut(sx, sy)) continue;
+            double sway = 0.5 + 0.5 * tri((double)t_ms / 800.0 + (double)(hash2(sx, sy, 71) % 1000) / 1000.0);
+            int tx = x + dir;
+            if (tx < 0 || tx >= scr_cols) continue;
+            if (row[x] == 'o' && row[tx] == '|' && amp * sway > 0.45) {
+                row[x] = '|';
+                row[tx] = 'o';
+                x += dir;  // the moved glyph must not be moved again
+            } else if (row[x] == '\'' && (row[tx] == ' ' || row[tx] == ',') && amp * (0.4 + 0.6 * sway) > 0.4) {
+                row[x] = is_art(sx, sy) ? ' ' : (sy >= ground_top(sx) ? ',' : ' ');
+                row[tx] = '\'';
+                x += dir;
+            }
+        }
+    }
+}
+
 // Paints the whole screen: static background, twinkling stars, smoke and flowing river.
 static void draw_scene(long t_ms) {
     if (bg_rows != scr_rows || bg_cols != scr_cols) {
@@ -533,6 +626,7 @@ static void draw_scene(long t_ms) {
     if (row == NULL) {
         exit(1);
     }
+    double wind = wind_at(t_ms);
     Fish fish = fish_at(t_ms);
     Sprite sprites[MAX_SPRITES];
     int n_sprites = fish_sprites(&fish, oy, sprites);
@@ -557,6 +651,9 @@ static void draw_scene(long t_ms) {
                     c = star_char(sx, sy, t_ms);
                 }
                 row[x] = c;
+            }
+            if (wabs(wind) > 0.05) {
+                apply_wind(row, y, sy, ox, wind, t_ms);
             }
         }
         for (int k = 0; k < n_sprites; ++k) {
@@ -683,8 +780,8 @@ static void run_scene() {
         long t = now_ms() - t0;
         int changed = sync_size();
         long sig = (t / 350) * 2 + (t / 1100) % 2;
-        if (fish_at(t).active) {
-            sig += (t / 80) * 1000003L;  // repaint often while a fish is in the air
+        if (fish_at(t).active || wabs(wind_at(t)) > 0.05) {
+            sig += (t / 80) * 1000003L;  // repaint often while a fish is in the air or the wind blows
         }
         if (changed || sig != last_sig || t - last_paint >= 1000) {
             if (size_ok()) {
