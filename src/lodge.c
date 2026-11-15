@@ -78,8 +78,9 @@ int read_file_lines(const char *landscape_file, char lines[][LINE_LENGTH], int m
     return line_count;
 }
 
-void* render_smoke(){
-    int swap_flag = 0; 
+void* render_smoke(void *arg){
+    (void)arg;
+    int swap_flag = 0;
     while (!stop_looping) {
         pthread_mutex_lock(&print_mutex);
         for (int i = PIC_END; i >= SMOKE_BEGIN; --i){
@@ -110,7 +111,8 @@ void* render_smoke(){
     return NULL;
 }
 
-void* render_river(){
+void* render_river(void *arg){
+    (void)arg;
     int river_size = RIVER_END - RIVER_BEGIN + 1;
     int pos[river_size];
     memset(pos, 0, sizeof(pos));
