@@ -55,6 +55,21 @@ lodge
   the day follows the season. A few clouds drift by.
 - **It is alive.** The river flows, the chimney smokes, now and then a gust of wind bends the smoke, sways the trees
   and speeds up the clouds, and a fish jumps out of the river.
+- **It follows the seasons**, by the date and without any internet. Besides the pines there are leafy trees whose crowns
+  change all year round:
+  - *winter*: snow settles on the ground, the peaks and the pines, the leafy trees stand bare, snow falls slowly in
+    showers (rarely by day, more often at night), the river freezes over and the fish stays under the ice, a cat in a
+    hat sits by the hut and now and then blinks, and a snowman stands on the meadow at the right;
+  - *spring*: the leafy trees blossom, flowers open, butterflies wander over the meadow by day;
+  - *summer*: dense foliage, tall grass full of flowers, butterflies by day;
+  - *autumn*: the crowns turn and thin out, leaves come off the trees and the wind carries them down, they gather in
+    piles with puddles between, and a flock of birds crosses the sky in a wedge.
+
+  Pines and leafy trees stand on the lower bank under the river too. Round bushes grow there and at the lower edge of the meadow (bare in winter, leafy the rest
+  of the year); in winter snow mounds and stones lie on the bank too.
+
+  The snow arrives over a few weeks and melts away in March. The hand-drawn picture in the middle is never touched by
+  the seasons.
 - **Only black and white.** Everything is plain ASCII; the moon is drawn in bold.
 - **It needs a terminal of at least 74×30.** In a smaller window Lodge asks you to make it bigger and starts by itself
   as soon as there is room. Full screen looks best (Ctrl+Cmd+F in Terminal.app on a Mac, F11 in GNOME Terminal).
@@ -75,7 +90,8 @@ Lodge ignores every key, the mouse and the scroll wheel, so nothing can spoil th
 - `LODGE_HEMISPHERE=south` — mirror the seasons (day length) for the southern hemisphere.
 - `LODGE_WIND_DIR=left|right` — force the wind direction (by default it is picked once per launch and never changes).
 - `LODGE_DEMO=1` — a wind gust and a fish jump in every time window, to see them without waiting.
-- `LODGE_AT="YYYY-MM-DD HH:MM"` — start the sky clock at that moment.
+- `LODGE_SEASON=winter|spring|summer|autumn` — show that season right now (otherwise it follows the date).
+- `LODGE_AT="YYYY-MM-DD HH:MM"` — start the sky clock at that moment (it also sets the date, so the season follows).
 - `LODGE_TIME_SCALE=600` — run the sky clock 600 times faster, to watch a whole day pass.
 
 Handy recipes:
@@ -86,6 +102,8 @@ LODGE_AT="2026-11-15 22:00" lodge                                # night, moon a
 LODGE_AT="2026-06-21 13:00" lodge                                # a long summer day
 LODGE_AT="2026-11-15 07:30" LODGE_TIME_SCALE=1500 lodge          # a whole day in about a minute
 LODGE_DEMO=1 LODGE_WIND_DIR=left lodge                           # wind and fish without waiting
+LODGE_SEASON=winter lodge                                        # snow, frozen river (also: spring, summer, autumn)
+LODGE_AT="2026-07-01 07:30" LODGE_TIME_SCALE=40000000 lodge      # a whole year in about 40 seconds
 ```
 
 ## 🛠️ Troubleshooting
