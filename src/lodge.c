@@ -276,11 +276,54 @@ static int line_len[LINES];       // real length of every picture row (the rest 
 static char *bg = NULL;           // static background, one cell per screen cell
 static unsigned char *skym = NULL; // 1 = sky cell (stars may appear here)
 static int bg_rows = 0, bg_cols = 0;
+static unsigned char *occ = NULL;  // 1 = a tree stands here: bushes and stones keep away from it
+static int g_mark_occ = 0;         // while set, put_ext() also marks the cells it paints in occ
 
 static unsigned hash2(int x, int y, unsigned salt) {
     unsigned h = (unsigned)x * 374761393u + (unsigned)y * 668265263u + salt * 2246822519u;
     h = (h ^ (h >> 13)) * 1274126177u;
     return h ^ (h >> 16);
+}
+
+// Seasons. All four amounts are 0..1 and change smoothly with the date (see season_update), so snow creeps in and
+// melts away over weeks. The hand-drawn picture itself is never touched by the seasons, only the world around it.
+typedef struct { double snow, leaf, flowers, ice, foliage; int phase, key; } Season;  // phase: 0 spring, 1 summer, 2 autumn
+static Season g_season = {0.0, 0.0, 0.2, 0.0, 0.0, 1, 0};
+static int bg_key = -1;  // the season key the background was built for
+
+// Snow on the ground, as a glyph, and whether this cell is covered at the moment.
+static int snowy(int sx, int sy) { return hash2(sx, sy, 91) % 1000 < (unsigned)(g_season.snow * 1000.0); }
+static int floor_div(int a, int b) { return a >= 0 ? a / b : -((-a + b - 1) / b); }
+
+// Snow on the ground is an even field: long strokes of mostly ~ with some -, staggered from row to row, a rare dot.
+static char snow_glyph(int sx, int sy) {
+    static const char strokes[5] = {'~', '~', '~', '~', '-'};
+    if (hash2(sx, sy, 95) % 1000 >= 985) return '.';  // a rare crumb
+    int block = floor_div(sx + (sy % 2) * 3, 6);
+    return strokes[hash2(block, sy, 92) % 5];
+}
+
+// One cell of the generated meadow: snow in winter, lots of flowers and tall grass in summer, in autumn piles of
+// fallen leaves and puddles.
+static char meadow_cell(int sx, int sy) {
+    if (snowy(sx, sy)) return snow_glyph(sx, sy);
+    double leaf = g_season.leaf, flowers = g_season.flowers;
+    if (leaf > 0.05) {
+        unsigned c = hash2(sx, sy, 93) % 100;
+        if (hash2(sx / 6, sy / 3, 98) % 100 < (unsigned)(30.0 * leaf) + 4 && c < 70) {
+            return hash2(sx, sy, 99) % 4 ? '~' : '%';  // a pile of leaves
+        }
+        int m = ((sx % 9) + 9) % 9;
+        if (hash2(sx / 9, sy, 88) % 100 < (unsigned)(10.0 * leaf) && m >= 1 && m <= 7) return '_';  // a puddle
+        if (c < (unsigned)(4.0 * leaf)) return '~';
+    }
+    if (hash2(sx, sy, 1) % 1000 < (unsigned)((12.0 + 90.0 * flowers) * (1.0 - g_season.snow))) {  // none under the snow
+        unsigned k = hash2(sx, sy, 89) % 100;
+        return k < 60 ? '@' : (k < 85 ? '*' : 'o');
+    }
+    unsigned g = hash2(sx, sy, 87) % 100;
+    if (g < (unsigned)(45.0 * flowers)) return g % 3 == 0 ? ';' : (g % 3 == 1 ? '"' : '\'');  // tall summer grass
+    return ',';
 }
 
 static int ground_top(int sx) { return sx < PIC_W / 2 ? 14 : 12; }  // first grass row, left / right of the picture
@@ -304,6 +347,7 @@ static void gen_cell(int sx, int sy, char *ch, unsigned char *sky) {
     if (sy >= PIC_H) {  // near bank in front of the river
         unsigned h = hash2(sx, sy, 11) % 100;
         *ch = h < 55 ? ',' : (h < 65 ? '\'' : (h < 72 ? '.' : (h < 74 ? '@' : ' ')));
+        if (snowy(sx, sy)) *ch = snow_glyph(sx, sy);
     } else if (sy == SHORE_UP || sy == SHORE_DOWN) {
         *ch = '`';
     } else if (sy >= RIVER_ROW_FIRST && sy <= RIVER_ROW_LAST) {
@@ -312,7 +356,7 @@ static void gen_cell(int sx, int sy, char *ch, unsigned char *sky) {
         if ((sy == 20 || sy == 21) && sx >= PIC_W - 2) {
             *ch = '_';  // the bank line of the picture goes on to the right
         } else {
-            *ch = hash2(sx, sy, 1) % 100 < 2 ? '@' : ',';
+            *ch = meadow_cell(sx, sy);
         }
     } else {
         *sky = 1;
@@ -325,14 +369,21 @@ static void put_ext(int ox, int oy, int sx, int sy, char ch, int solid) {
     if (x < 0 || x >= scr_cols || y < 0 || y >= scr_rows || is_art(sx, sy)) return;
     bg[(size_t)y * scr_cols + x] = ch;
     if (solid) skym[(size_t)y * scr_cols + x] = 0;
+    if (g_mark_occ && occ != NULL) occ[(size_t)y * scr_cols + x] = 1;
 }
 
-static void draw_mountain(int ox, int oy, int cx, int h, int base) {
+// `layer` 0 is the farthest range (sparse), 2 the nearest one (dense): the nearer a range is, the more `^` it has.
+static void draw_mountain(int ox, int oy, int cx, int h, int base, int layer) {
     int top = base - h;
     for (int r = top; r <= base; ++r) {
         int d = r - top, l = cx - d, rr = cx + 1 + d;
         for (int x = l + 1; x < rr; ++x) {
-            put_ext(ox, oy, x, r, hash2(x, r, 7) % 100 < 30 ? '^' : ' ', 1);
+            char ch = hash2(x, r, 7 + layer) % 100 < (unsigned)(14 + 14 * layer) ? '^' : ' ';
+            if (d >= 1 && d <= (int)(g_season.snow * (h / 2.0) + 0.5)) {  // the snow cap of the peak
+                unsigned q = hash2(x, r, 94) % 100;
+                ch = q < 55 ? '*' : (q < 80 ? '.' : ' ');
+            }
+            put_ext(ox, oy, x, r, ch, 1);
         }
         put_ext(ox, oy, l, r, '/', 1);
         put_ext(ox, oy, rr, r, '\\', 1);
@@ -340,56 +391,351 @@ static void draw_mountain(int ox, int oy, int cx, int h, int base) {
 }
 
 static void draw_tree(int ox, int oy, int cx, int h, int base) {
+    g_mark_occ = 1;
     for (int i = 0; i < h; ++i) {
         int r = base - h + i, l = cx - 1 - i, rr = cx + 1 + i;
         for (int x = l + 1; x < rr; ++x) {
-            put_ext(ox, oy, x, r, (i >= 1 && hash2(x, r, 9) % 100 < 20) ? 'o' : '|', 1);
+            char ch = (i >= 1 && hash2(x, r, 9) % 100 < 20) ? 'o' : '|';
+            put_ext(ox, oy, x, r, ch, 1);
         }
         put_ext(ox, oy, l, r, '/', 1);
         put_ext(ox, oy, rr, r, '\\', 1);
     }
-    put_ext(ox, oy, cx - h, base, '\'', 1);
+    put_ext(ox, oy, cx, base - h - 1, '*', 1);   // the star on the top
+    for (int x = cx - h; x <= cx + h; ++x) put_ext(ox, oy, x, base, ' ', 1);  // the foot row is empty, like in the picture:
+    put_ext(ox, oy, cx - h, base, '\'', 1);       // nothing grows between the marks and inside the trunk
     put_ext(ox, oy, cx - 1, base, '|', 1);
     put_ext(ox, oy, cx + 1, base, '|', 1);
     put_ext(ox, oy, cx + h, base, '\'', 1);
+    g_mark_occ = 0;
+}
+
+// Deciduous trees, so that the foliage can change with the seasons: bare in winter, blossoms in spring, dense in summer,
+// yellowing and thinning in autumn. `foliage` (0..1) says how many cells of the crown carry leaves.
+typedef struct { int cx, top, ch, base; } Crown;  // scene coordinates; the crown has `ch` rows
+#define MAX_CROWNS 2048
+static Crown g_crowns[MAX_CROWNS];
+static int g_ncrowns = 0;
+
+static int crown_half(int ch, int i) {  // half width of the row i of the crown of the template tree
+    static const int hw[6] = {4, 6, 7, 7, 6, 4};
+    (void)ch;
+    return hw[i < 0 ? 0 : (i > 5 ? 5 : i)];
+}
+
+// The leaf of a crown cell, by season.
+static char leaf_glyph(int x, int r) {
+    unsigned w = hash2(x, r, 121) % 100;
+    if (g_season.phase == 0) return w < 45 ? '*' : (w < 75 ? 'o' : '.');                   // blossoms
+    if (g_season.phase == 2) return w < 30 ? '&' : (w < 60 ? '~' : (w < 80 ? '%' : ','));  // autumn leaves
+    return w < 40 ? '#' : (w < 70 ? '&' : (w < 90 ? '%' : '@'));                           // summer: dense
+}
+
+// The leafy tree is drawn from a template, 15 cells wide, the axis of the trunk is column 7 (counted from 0).
+// Summer: a round crown with an outline and branches inside; the trunk goes straight down, without roots.
+// Winter: the same trunk and branches, no outline.
+// Spring and autumn: the summer tree with blossoms or yellow leaves between the branches.
+#define OAK_ROWS 8
+static const char *const OAK_CROWN[OAK_ROWS] = {
+    "   .-------.   ",
+    " /  \\  |  /  \\ ",
+    "(  \\ \\ | / /  )",
+    "(   \\ \\|/ /   )",
+    " \\   -\\|/-   / ",
+    "   `---|---'   ",
+    "       |       ",
+    "       |       ",
+};
+static const char *const OAK_BARE[OAK_ROWS] = {
+    "               ",
+    "    \\  |  /    ",
+    "   \\ \\ | / /   ",
+    "    \\ \\|/ /    ",
+    "     -\\|/-     ",
+    "       |       ",
+    "       |       ",
+    "       |       ",
+};
+
+// `base` is the row of the foot of the trunk. Around the tree there is a blank margin one cell wide that follows its silhouette
+// (the span of every row), so that the grass, the snow or the mountains behind it do not mix with the drawing.
+static void draw_oak(int ox, int oy, int cx, int base) {
+    g_mark_occ = 1;
+    int top = base - (OAK_ROWS - 1);
+    const char *const *tpl = g_season.foliage > 0.05 ? OAK_CROWN : OAK_BARE;
+    for (int i = 0; i < OAK_ROWS; ++i) {
+        int first = -1, last = -1;
+        for (int k = 0; k < 15; ++k) {
+            if (tpl[i][k] != ' ') {
+                if (first < 0) first = k;
+                last = k;
+            }
+        }
+        for (int k = first; first >= 0 && k <= last; ++k) {
+            for (int dy = -1; dy <= 1; ++dy) {
+                for (int dx = -1; dx <= 1; ++dx) put_ext(ox, oy, cx - 7 + k + dx, top + i + dy, ' ', 1);
+            }
+        }
+    }
+    for (int i = 0; i < OAK_ROWS; ++i) {
+        for (int k = 0; k < 15; ++k) {
+            if (tpl[i][k] != ' ') put_ext(ox, oy, cx - 7 + k, top + i, tpl[i][k], 1);
+        }
+    }
+    if (g_season.foliage > 0.05 && g_season.phase != 1) {  // blossoms in spring, yellow leaves in autumn, between the branches
+        for (int i = 1; i <= 4; ++i) {
+            int hw = crown_half(6, i);
+            for (int dx = -hw + 1; dx < hw; ++dx) {
+                int x = cx + dx, r = top + i;
+                if (tpl[i][7 + dx] == ' ' && hash2(x, r, 120) % 1000 < (unsigned)(g_season.foliage * 550.0)) {
+                    put_ext(ox, oy, x, r, leaf_glyph(x, r), 1);
+                }
+            }
+        }
+    }
+    if (g_ncrowns < MAX_CROWNS) g_crowns[g_ncrowns++] = (Crown){cx, top, 6, base};
+    g_mark_occ = 0;
+}
+
+// Small plants and stones, drawn from templates like the leafy tree: with a blank margin that follows the silhouette.
+// Bushes: a round outline with branches inside (summer), bare branches (winter), leaves between the branches in spring and
+// autumn. Snow mounds and stones lie on the lower bank in winter.
+static const char *const BUSH_CROWN[3] = {" .-\"-. ", "( \\|/ )", " `-|-' "};
+static const char *const BUSH_BARE[3] = {" \\ | / ", "  \\|/  ", "   |   "};
+static const char *const SNOW_MOUND[2] = {"  _.-._  ", " (_____) "};
+static const char *const STONE[2] = {" .-. ", "(___)"};
+
+// Everything but the trees is switched off for now (set to 1 to bring it back): bushes, stones, snow mounds.
+#define SHOW_BUSHES 0
+#define SHOW_STONES 0
+#define SHOW_MOUNDS 0
+
+static int plant_free(int ox, int oy, int left, int base, int n, int w) {
+    for (int sy = base - n; sy <= base + 1; ++sy) {
+        for (int sx = left - 2; sx <= left + w + 1; ++sx) {
+            int x = sx + ox, y = sy + oy;
+            if (x < 0 || x >= scr_cols || y < 0 || y >= scr_rows) continue;
+            if (occ[(size_t)y * scr_cols + x]) return 0;
+        }
+    }
+    return 1;
+}
+
+// `tight`: the blank margin is a cross (left, right, up, down), without the diagonal cells, so it hugs the shape closer.
+static void draw_plant(int ox, int oy, int left, int base, const char *const *rows, int n, int w, int tight) {
+    int top = base - (n - 1);
+    g_mark_occ = 1;
+    for (int i = 0; i < n; ++i) {
+        int first = -1, last = -1;
+        for (int k = 0; k < w; ++k) {
+            if (rows[i][k] != ' ') {
+                if (first < 0) first = k;
+                last = k;
+            }
+        }
+        for (int k = first; first >= 0 && k <= last; ++k) {
+            for (int dy = -1; dy <= 1; ++dy) {
+                for (int dx = -1; dx <= 1; ++dx) {
+                    if (tight && dx != 0 && dy != 0) continue;
+                    put_ext(ox, oy, left + k + dx, top + i + dy, ' ', 1);
+                }
+            }
+        }
+    }
+    for (int i = 0; i < n; ++i) {
+        for (int k = 0; k < w; ++k) {
+            if (rows[i][k] != ' ') put_ext(ox, oy, left + k, top + i, rows[i][k], 1);
+        }
+    }
+    g_mark_occ = 0;
+}
+
+// Walks along the screen from a fixed point of the scene (so nothing moves when the window is resized) and puts a
+// plant every few cells. bank = 1: the lower bank under the river; bank = 0: the lower edge of the meadow.
+static void place_plants(int ox, int oy, int bank) {
+    int x = -420, x_end = scr_cols - ox + 12, x_vis = -ox - 14;
+    int leafy = g_season.foliage > 0.05;
+    int winter = g_season.snow >= 0.5;
+    for (int k = 0; k < 4000 && x < x_end; ++k) {
+        unsigned h1 = hash2(k, bank, 151), h2 = hash2(k, bank, 152), h3 = hash2(k, bank, 153);
+        int kind = bank ? (h1 % 100 < 40 ? 0 : (h1 % 100 < 75 ? 1 : 2)) : (h1 % 100 < 35 ? 0 : 3);  // 0 bush, 1 mound, 2 stone, 3 nothing
+        if (kind >= 1 && kind <= 2 && !winter) kind = 3;
+        if ((kind == 0 && !SHOW_BUSHES) || (kind == 1 && !SHOW_MOUNDS) || (kind == 2 && !SHOW_STONES)) kind = 3;
+        int w = kind == 0 ? 7 : (kind == 1 ? 9 : 5);
+        int base = bank ? 32 + (int)(h2 % 5) : 23;
+        int gap = bank ? 12 + (int)(h3 % 30) : 8 + (int)(h3 % 22);
+        if (kind != 3 && x + w >= x_vis && plant_free(ox, oy, x, base, kind == 0 ? 3 : 2, w)) {
+            if (kind == 0) {
+                draw_plant(ox, oy, x, base, leafy ? BUSH_CROWN : BUSH_BARE, 3, 7, 1);
+                if (leafy && g_season.phase != 1) {  // blossoms or yellow leaves between the branches
+                    for (int dx = 1; dx <= 5; dx += 4) {
+                        int lx = x + dx, ly = base - 1;
+                        if (hash2(lx, ly, 120) % 1000 < (unsigned)(g_season.foliage * 550.0)) put_ext(ox, oy, lx, ly, leaf_glyph(lx, ly), 1);
+                    }
+                }
+            } else {
+                draw_plant(ox, oy, x, base, kind == 1 ? SNOW_MOUND : STONE, 2, w, 0);
+            }
+        }
+        x += w + gap;
+    }
+}
+
+// Trees on the whole lower bank under the river, band after band: the first band stands right under the river, every
+// next one 8 rows lower, as far as the bottom of the screen, so a taller window just shows more of the forest. The nearer
+// the band, the taller its pines. Every band is a walk through the scene from a fixed point (so a resize moves nothing);
+// the bands are drawn from the farthest to the nearest, so a nearer tree stands in front of a farther one.
+static void place_bank_trees(int ox, int oy) {
+    int x_end = scr_cols - ox + 14, x_vis = -ox - 16;
+    for (int band = 0; band < 14; ++band) {
+        if (36 + 8 * band - 9 >= scr_rows - oy) break;  // the tops of this band are already below the screen
+        int x = -420;
+        for (int k = 0; k < 4000 && x < x_end; ++k) {
+            unsigned h1 = hash2(k, band, 161), h2 = hash2(k, band, 162), h3 = hash2(k, band, 163);
+            int oak = h1 % 100 < 45;
+            int h = oak ? 6 : 5 + (int)(h2 % 4) + (band > 4 ? 4 : band);
+            int reach = oak ? 9 : h + 1;
+            int base = 36 + 8 * band + (int)(h3 % 7);
+            int cx = x + reach;
+            if (cx + reach >= x_vis) {
+                // The box of the tree: a pine is a triangle with the star above it, an oak is 15 cells wide and 8 rows high.
+                int x0 = oak ? cx - 8 : cx - h - 1, x1 = oak ? cx + 8 : cx + h + 1;
+                int y0 = oak ? base - 8 : base - h - 2, y1 = base + 1;
+                int seen = 1;
+                for (int sy = y0; sy <= y1 && seen; ++sy) {
+                    for (int sx = x0; sx <= x1; ++sx) {
+                        int bx = sx + ox, by = sy + oy;
+                        if (bx >= 0 && bx < scr_cols && by >= 0 && by < scr_rows && occ[(size_t)by * scr_cols + bx]) {
+                            seen = 0;  // a tree of a farther band stands here: never draw over it, that spoils both trees
+                            break;
+                        }
+                    }
+                }
+                if (oak && base + oy >= scr_rows) seen = 0;  // a round crown without its trunk looks like a bush
+                if (seen) {
+                    if (oak) draw_oak(ox, oy, cx, base); else draw_tree(ox, oy, cx, h, base);
+                }
+            }
+            x = cx + reach + 3 + (int)(hash2(k, band, 164) % 14);
+        }
+    }
 }
 
 // Chains of mountains / rows of trees marching outwards from the picture. side = -1 (left) or +1 (right).
 static void build_side(int ox, int oy, int side, int extent) {
-    int cxs[MAX_PEAKS], hs[MAX_PEAKS], n = 0;
-    int edge = side < 0 ? -3 : PIC_W + 2;
-    for (int k = 0; k < MAX_PEAKS && (side < 0 ? edge > -extent - 24 : edge < PIC_W + extent + 24); ++k) {
-        int h = 5 + (int)(hash2(k, side, 21) % 8);
-        int gap = (int)(hash2(k, side, 22) % 4) - 1;
-        int cx = side < 0 ? edge - gap - h : edge + gap + h;
-        cxs[n] = cx;
-        hs[n++] = h;
-        edge = side < 0 ? cx - h : cx + 1 + h;
-    }
-    for (int k = n - 1; k >= 0; --k) {  // farthest first, the nearest ones stand in front
-        draw_mountain(ox, oy, cxs[k], hs[k], mount_base(side < 0 ? -1 : PIC_W));
+    // Three ranges, from the farthest to the nearest: tall peaks far away, hills in front. Peaks of one range overlap
+    // each other and the nearer range stands in front of the farther one, so the slopes are layered, not in a row.
+    static const int h_min[3] = {8, 5, 3}, h_span[3] = {5, 5, 4}, overlap[3] = {3, 3, 1};
+    for (int layer = 0; layer < 3; ++layer) {
+        int cxs[MAX_PEAKS], hs[MAX_PEAKS], n = 0;
+        int edge = side < 0 ? -3 - 5 * layer : PIC_W + 2 + 5 * layer;
+        for (int k = 0; k < MAX_PEAKS && (side < 0 ? edge > -extent - 24 : edge < PIC_W + extent + 24); ++k) {
+            int h = h_min[layer] + (int)(hash2(k, side * 3 + layer, 21) % (unsigned)h_span[layer]);
+            int gap = (int)(hash2(k, side * 3 + layer, 22) % (unsigned)(overlap[layer] + 2)) - overlap[layer];  // negative: overlaps
+            if (k == 0 && gap < 0) gap = 0;                   // the first peak never reaches into the picture
+            int cx = side < 0 ? edge - gap - h : edge + gap + h;
+            cxs[n] = cx;
+            hs[n++] = h;
+            edge = side < 0 ? cx - h : cx + 1 + h;
+        }
+        for (int k = n - 1; k >= 0; --k) {
+            draw_mountain(ox, oy, cxs[k], hs[k], mount_base(side < 0 ? -1 : PIC_W), layer);
+        }
     }
 
-    edge = side < 0 ? -3 : PIC_W + 2;
+    int edge = side < 0 ? -3 : PIC_W + 2;
     for (int k = 0; k < MAX_PEAKS && (side < 0 ? edge > -extent - 24 : edge < PIC_W + extent + 24); ++k) {
-        int h = 4 + (int)(hash2(k, side, 31) % 4);
-        int base = 16 + (int)(hash2(k, side, 32) % 3);
-        int cx = side < 0 ? edge - h - 1 : edge + h + 1;
-        draw_tree(ox, oy, cx, h, base);
+        int oak = hash2(k, side, 34) % 100 < 45;  // about every other tree is deciduous
+        int h = oak ? 6 : 4 + (int)(hash2(k, side, 31) % 4);
+        int reach = oak ? 9 : h + 1;              // half of the width of the tree with its margin
+        // The leafy trees stand nearer to us than the pines, lower on the meadow, so their round crowns have grass or
+        // snow behind them and not the slopes of the mountains.
+        int base = oak ? 21 + (int)(hash2(k, side, 32) % 2) : 16 + (int)(hash2(k, side, 32) % 3);
+        int cx = side < 0 ? edge - reach : edge + reach;
+        if (oak) draw_oak(ox, oy, cx, base); else draw_tree(ox, oy, cx, h, base);
         int space = 2 + (int)(hash2(k, side, 33) % 7);
-        edge = side < 0 ? cx - h - 1 - space : cx + h + 1 + space;
+        edge = side < 0 ? cx - reach - space : cx + reach + space;
     }
+}
+
+// Winter company: a cat in a hat sits by the hut and now and then blinks, a snowman with a broom stands on the bank
+// across the river. Both get a blank margin (the silhouette widened by one cell, up/down/left/right only).
+#define CAT_SX 6                 // scene x of the cat's left edge, its lowest row is scene row CAT_BASE
+#define CAT_BASE 20
+#define CAT_EYE_ROW 2            // index of the row with the eyes
+#define MAN_SX 62                // right edge of the meadow, between the last pines and the picture's edge
+#define MAN_BASE 18
+static const char *const CAT_ROWS[] = {"  *   ", " /_\\  ", "(o.o) ", "=(w)= ", " (_)_)"};
+static const char *const MAN_ROWS[] = {"  _[_]_  ", "  (o,o)  ", ">-(   )-<", " (  :  ) ", "  `---'  "};
+static int g_cat_x = -1, g_cat_y = -1;  // screen position of the cat's first row and column, -1 = no cat
+
+static void stamp_pet(int ox, int oy, int sx, int base, const char *const *rows, int n, int mark) {
+    int top = base - n + 1;
+    for (int i = 0; i < n; ++i) {  // blank margin first, then the drawing over it
+        int lo = 1 << 20, hi = -1;
+        for (int k = 0; rows[i][k] != '\0'; ++k) {
+            if (rows[i][k] != ' ') {
+                if (k < lo) lo = k;
+                hi = k;
+            }
+        }
+        for (int k = lo; k <= hi; ++k) {
+            static const int d[5][2] = {{0, 0}, {1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+            for (int j = 0; j < 5; ++j) {
+                int x = sx + k + d[j][0] + ox, y = top + i + d[j][1] + oy;
+                if (x >= 0 && x < scr_cols && y >= 0 && y < scr_rows) {
+                    bg[(size_t)y * scr_cols + x] = ' ';
+                    skym[(size_t)y * scr_cols + x] = 0;
+                    if (mark) occ[(size_t)y * scr_cols + x] = 1;
+                }
+            }
+        }
+    }
+    for (int i = 0; i < n; ++i) {
+        for (int k = 0; rows[i][k] != '\0'; ++k) {
+            int x = sx + k + ox, y = top + i + oy;
+            if (rows[i][k] != ' ' && x >= 0 && x < scr_cols && y >= 0 && y < scr_rows) {
+                bg[(size_t)y * scr_cols + x] = rows[i][k];
+            }
+        }
+    }
+}
+
+static void place_winter_pets(int ox, int oy) {
+    g_cat_x = g_cat_y = -1;
+    if (g_season.snow < 0.5) return;
+    int n_cat = (int)(sizeof CAT_ROWS / sizeof *CAT_ROWS), n_man = (int)(sizeof MAN_ROWS / sizeof *MAN_ROWS);
+    if (CAT_BASE - n_cat >= -oy && CAT_BASE + 1 + oy < scr_rows && CAT_SX - 1 + ox >= 0) {
+        stamp_pet(ox, oy, CAT_SX, CAT_BASE, CAT_ROWS, n_cat, 0);
+        g_cat_x = CAT_SX + ox;
+        g_cat_y = CAT_BASE - n_cat + 1 + oy;
+    }
+    if (MAN_BASE + 1 + oy < scr_rows && MAN_BASE - n_man - 1 + oy >= 0) {  // only when the whole snowman fits
+        stamp_pet(ox, oy, MAN_SX, MAN_BASE, MAN_ROWS, n_man, 1);
+    }
+}
+
+// The cat shuts its eyes for a quarter of a second every 4-8 seconds or so, at uneven moments.
+static int cat_blinks(long t_ms) {
+    long slot = t_ms / 6000;
+    long start = 1000 + (long)(hash2((int)slot, 7, 301) % 4000);
+    long in = t_ms - slot * 6000;
+    return in >= start && in < start + 250;
 }
 
 static void build_background() {
     size_t n = (size_t)scr_rows * (size_t)scr_cols;
     bg = realloc(bg, n);
     skym = realloc(skym, n);
-    if (bg == NULL || skym == NULL) {
+    occ = realloc(occ, n);
+    if (bg == NULL || skym == NULL || occ == NULL) {
         exit(1);
     }
+    memset(occ, 0, n);
     bg_rows = scr_rows;
     bg_cols = scr_cols;
+    bg_key = g_season.key;
+    g_ncrowns = 0;
     int ox = (scr_cols - PIC_W) / 2, oy = (scr_rows - PIC_H) / 2;
 
     for (int y = 0; y < scr_rows; ++y) {
@@ -397,7 +743,13 @@ static void build_background() {
             size_t i = (size_t)y * scr_cols + x;
             int sx = x - ox, sy = y - oy;
             if (is_art(sx, sy)) {
-                bg[i] = lines[sy][sx];
+                char a = lines[sy][sx];
+                if (a == '@' && g_season.snow >= 0.5) {
+                    a = '*';                                       // flowers under the snow
+                } else if (a == ',' && sy >= 12 && snowy(sx, sy)) {
+                    a = snow_glyph(sx, sy);                        // the meadow of the picture gets the same snow as the rest
+                }
+                bg[i] = a;
                 skym[i] = 0;
             } else {
                 gen_cell(sx, sy, &bg[i], &skym[i]);
@@ -424,6 +776,11 @@ static void build_background() {
 
     build_side(ox, oy, -1, ox);
     build_side(ox, oy, +1, scr_cols - ox - PIC_W);
+    place_plants(ox, oy, 0);   // bushes at the lower edge of the meadow (switched off for now)
+    place_plants(ox, oy, 1);   // snow mounds on the lower bank, and bushes and stones when they are switched on:
+                               // they go first, and the forest of the bank leaves them their place
+    place_winter_pets(ox, oy); // the snowman marks its place before the forest of the bank is planted
+    place_bank_trees(ox, oy);  // trees on the lower bank
 }
 
 static double g_star_f = 1.0;  // 0 = broad daylight, 1 = night: how many of the stars are out
@@ -455,6 +812,9 @@ typedef struct { int active; long dt; int x0; int row0; int h; int dir; } Fish;
 
 static Fish fish_at(long t_ms) {
     Fish f = {0, 0, 0, 0, 3, 1};
+    if (g_season.ice >= 0.5) {
+        return f;  // the river is frozen over
+    }
     int k = (int)(t_ms / FISH_WINDOW_MS);
     if (!g_demo && hash2(k, 0, 51) % 100 >= 15) {
         return f;  // only 15 windows out of 100 have a jump: about one a minute
@@ -585,9 +945,43 @@ static double wind_at(long t_ms) {
     return w > 1.0 ? 1.0 : (w < -1.0 ? -1.0 : w);
 }
 
+// How far a gust has pushed everything that floats on the wind so far: the integral of the gust strength over time,
+// updated once per frame. Clouds, snow and leaves drift along the wind direction and are carried further by gusts.
+static double g_wind_push = 0.0;
+#define PUSH_RING 512                  // 51 seconds of history on a 100 ms grid
+static double g_push_ring[PUSH_RING];  // the integral of the gust strength, sampled every 100 ms
+static long g_push_last = 0;           // newest filled grid index
+static double g_push_w = 0.0;          // the strength at that index
+
+// The integral of the gust strength up to the moment t (seconds), from the ring; older than the ring = the oldest value.
+static double wind_push_at(double t_s) {
+    double g = t_s * 10.0;
+    if (g < 0.0) g = 0.0;
+    long oldest = g_push_last - PUSH_RING + 2;
+    if (oldest < 0) oldest = 0;
+    long i = (long)g;
+    double f = g - (double)i;
+    if (i < oldest) { i = oldest; f = 0.0; }
+    if (i + 1 > g_push_last) { i = g_push_last > 0 ? g_push_last - 1 : 0; f = 1.0; }
+    return g_push_ring[i % PUSH_RING] * (1.0 - f) + g_push_ring[(i + 1) % PUSH_RING] * f;
+}
+
+static void wind_push_update(long t_ms, double wind) {
+    (void)wind;
+    long target = t_ms / 100 + 1;
+    if (target - g_push_last > 20000) g_push_last = target - 20000;  // after a long pause do not replay all of it
+    while (g_push_last < target) {
+        long i = ++g_push_last;
+        double w = wind_at(i * 100);
+        g_push_ring[i % PUSH_RING] = g_push_ring[(i - 1) % PUSH_RING] + 0.1 * 0.5 * (wabs(g_push_w) + wabs(w));
+        g_push_w = w;
+    }
+    g_wind_push = wind_push_at((double)t_ms / 1000.0);
+}
+
 // The hand-drawn hut is never touched by the wind.
 static int in_hut(int sx, int sy) {
-    return sx >= 14 && sx <= 32 && sy >= 12 && sy <= 22;
+    return (sx >= 14 && sx <= 32 && sy >= 12 && sy <= 22) || (sx >= MAN_SX - 1 && sx <= MAN_SX + 9 && sy >= MAN_BASE - 5 && sy <= MAN_BASE + 1);
 }
 
 // Bends the smoke and sways the foliage of one composed screen row. `row` is screen row y (scene row sy).
@@ -645,6 +1039,7 @@ static void apply_wind(char *row, int y, int sy, int ox, double w, long t_ms) {
 
 static double g_epoch0 = 0.0, g_scale = 1.0;
 static int g_south = 0;
+static int g_season_day = -1;  // LODGE_SEASON: a fixed day of the year instead of the date (-1 = use the date)
 
 static void sky_init() {
     g_epoch0 = (double)time(NULL);
@@ -667,6 +1062,13 @@ static void sky_init() {
     const char *hs = getenv("LODGE_HEMISPHERE");
     g_south = hs != NULL && (hs[0] == 's' || hs[0] == 'S');
     g_demo = getenv("LODGE_DEMO") != NULL;
+    const char *se = getenv("LODGE_SEASON");  // winter | spring | summer | autumn: look at a season without waiting
+    if (se != NULL) {
+        if (se[0] == 'w' || se[0] == 'W') g_season_day = 15;
+        if (se[0] == 's' && se[1] == 'p') g_season_day = 120;
+        if (se[0] == 's' && se[1] == 'u') g_season_day = 200;
+        if (se[0] == 'a' || se[0] == 'A') g_season_day = 292;
+    }
 }
 
 static double wrap(double x, double m) {
@@ -674,7 +1076,7 @@ static double wrap(double x, double m) {
     return x < 0 ? x + m : x;
 }
 
-typedef struct { double hour, rise, set, phase; } SkyClock;
+typedef struct { double hour, rise, set, phase; int yday; } SkyClock;
 
 static void sky_clock(long t_ms, SkyClock *c) {
     double e = g_epoch0 + (double)t_ms / 1000.0 * g_scale;
@@ -682,6 +1084,7 @@ static void sky_clock(long t_ms, SkyClock *c) {
     struct tm tmv;
     localtime_r(&tt, &tmv);
     c->hour = tmv.tm_hour + tmv.tm_min / 60.0 + tmv.tm_sec / 3600.0;
+    c->yday = tmv.tm_yday;
     double y = tri(((double)tmv.tm_yday - 172.0) / 365.0);      // -1 at the June solstice, +1 in December
     double summer = -(1.5 * y - 0.5 * y * y * y);               // smoothed: +1 in June, -1 in December
     if (g_south) summer = -summer;
@@ -689,6 +1092,29 @@ static void sky_clock(long t_ms, SkyClock *c) {
     c->rise = 12.5 - len / 2.0;
     c->set = 12.5 + len / 2.0;
     c->phase = wrap((e - 947182440.0) / 86400.0, 29.530588853) / 29.530588853;  // 0 = new moon, 0.5 = full
+}
+
+static double ramp(double d, double a, double b) { return d <= a ? 0.0 : (d >= b ? 1.0 : (d - a) / (b - a)); }
+
+// Season amounts for the date, in the northern hemisphere (the southern one is half a year later).
+// Snow comes in over late November and December, stays through February and melts in March; leaves fall from
+// the end of September to the end of November; flowers open in April and May and fade through September.
+static void season_update(const SkyClock *c) {
+    double d = g_season_day >= 0 ? (double)g_season_day : (double)((c->yday + (g_south ? 182 : 0)) % 365);
+    double snow = d >= 324.0 ? ramp(d, 323.0, 354.0) : (d <= 59.0 ? 1.0 : 1.0 - ramp(d, 59.0, 90.0));
+    double leaf = (d < 262.0 || d > 329.0) ? 0.0 : (d < 292.0 ? (d - 262.0) / 30.0 : (329.0 - d) / 37.0);
+    double flowers = d < 91.0 ? 0.0 : (d < 135.0 ? ramp(d, 91.0, 135.0) : (d <= 243.0 ? 1.0 : 1.0 - ramp(d, 243.0, 288.0)));
+    g_season.snow = snow;
+    g_season.leaf = leaf;
+    g_season.flowers = flowers;
+    double ice = (snow - 0.45) / 0.5;
+    g_season.ice = ice < 0.0 ? 0.0 : (ice > 1.0 ? 1.0 : ice);
+    // The foliage of the deciduous trees: out in April and May, full until September, thinning to the end of November.
+    double foliage = d <= 91.0 ? 0.0 : (d < 135.0 ? (d - 91.0) / 44.0 : (d <= 262.0 ? 1.0 : (d < 329.0 ? 1.0 - 0.9 * (d - 262.0) / 67.0 : 0.1 * (1.0 - ramp(d, 329.0, 350.0)))));
+    g_season.foliage = foliage;
+    g_season.phase = d < 135.0 ? 0 : (d < 262.0 ? 1 : 2);
+    g_season.key = (int)(snow * 20.0) * 10000 + (int)(leaf * 20.0) * 100 + (int)(flowers * 20.0) +
+                   (int)(foliage * 20.0) * 1000000 + g_season.phase * 100000000;  // when it changes, the ground and the trees are rebuilt
 }
 
 // Share of the stars that are out: all of them at night, none by day, fading in and out around dusk and dawn.
@@ -770,13 +1196,8 @@ static int sky_sprites(long t_ms, int oy, double wind, const SkyClock *c, SkyLin
     }
 
     // A gust only speeds the clouds up (smoothly, along the wind): the extra distance is the integral of the gust.
-    static long last_t = 0;
-    static double last_w = 0.0, cloud_boost = 0.0;
-    if (t_ms > last_t) {
-        cloud_boost += 2.5 * 0.5 * (wabs(last_w) + wabs(wind)) * (double)(t_ms - last_t) / 1000.0;
-        last_t = t_ms;
-        last_w = wind;
-    }
+    (void)wind;
+    double cloud_boost = 2.5 * g_wind_push;
 
     int clouds = 2 + (scr_cols >= 140) + (scr_cols >= 220);
     int span = scr_cols + 48;
@@ -808,9 +1229,134 @@ static void paint_sky_line(char *row, unsigned char *bold, int y, const SkyLine 
     }
 }
 
+// Snow comes in showers: the time is cut into windows of 3 minutes, and a window has a shower of 1.5-2.5 minutes with
+// a probability that depends on the time of day: 15% of the windows by day (about 10% of the time), 90% at night (about
+// 60% of the time), smoothly in between at dusk and dawn. A shower fades in and out over 20 seconds. The result is
+// the strength of the snowfall right now, 0..1.
+static double snow_episode(long t_ms) {
+    if (g_demo) return 1.0;
+    const long window = 180000;
+    long k = t_ms / window;
+    SkyClock c0;
+    sky_clock(k * window, &c0);
+    double p = 0.15 + 0.75 * star_factor(&c0);
+    if ((double)(hash2((int)k, 0, 141) % 1000) / 1000.0 >= p) return 0.0;
+    long len = 90000 + (long)(hash2((int)k, 0, 142) % 60000);
+    long start = k * window + (long)(hash2((int)k, 0, 143) % (unsigned)(window - len));
+    long dt = t_ms - start;
+    if (dt < 0 || dt >= len) return 0.0;
+    double edge = (double)(dt < len - dt ? dt : len - dt) / 20000.0;
+    return edge >= 1.0 ? 1.0 : edge * edge * (3.0 - 2.0 * edge);
+}
+
+// A thing that moves through the picture and is painted on top: a snowflake, a leaf, a bird, a butterfly wing.
+// `soft` things may also be painted over meadow and leaf cells, the others only over empty air.
+typedef struct { int x, y; char ch; int soft; } Flake;
+#define MAX_FLAKES 1500
+
+static int soft_cell(char c) {
+    return c == ' ' || c == ',' || c == '"' || c == ';' || c == '\'' || c == '.' || c == ':' || c == '~';
+}
+
+// Everything that falls, flies or flutters, as a function of the time alone:
+//  - snow in winter falls from the sky, drifts along the wind and is carried further by gusts;
+//  - in autumn the leaves leave the crowns of the deciduous trees, fall to the ground (the wind pushes them while
+//    they fall) and rest there a while before the next one comes off;
+//  - in autumn a flock of birds now and then crosses the sky in a wedge, with the wind;
+//  - in spring and summer by day butterflies wander over the meadow.
+static int weather(long t_ms, int ox, int oy, Flake *out) {
+    int n = 0;
+    double t = (double)t_ms / 1000.0;
+    int total = scr_cols * scr_rows / 30;
+    if (total > MAX_FLAKES) total = MAX_FLAKES;
+
+    double snow_d = g_season.snow > 0.01 ? g_season.snow * (0.5 + 0.5 * (0.5 + 0.5 * tri(t / 90.0))) * snow_episode(t_ms) : 0.0;
+    if (snow_d >= 0.01) {
+        for (int i = 0; i < total && n < MAX_FLAKES; ++i) {
+            if (hash2(i, 0, 104) % 1000 >= (unsigned)(snow_d * 1000.0)) continue;
+            unsigned hx = hash2(i, 0, 101), hy = hash2(i, 0, 102), hs = hash2(i, 0, 103);
+            int span = oy + 12 + (int)(hs % 12);  // the row where this flake lands, near the ground
+            double phase = (double)(hx % 1000) / 1000.0;
+            double speed = 0.45 * (0.9 + (double)((hs >> 8) % 100) / 100.0);  // rows per second: snow falls slowly
+            double sway = 1.6 * tri(t / (3.0 + (double)((hs >> 16) % 4)) + phase);
+            double drift = g_wind_dir * (0.4 * t + 4.0 * g_wind_push);
+            unsigned q = (hs >> 20) % 100;
+            int y = (int)wrap((double)(hy % (unsigned)span) + speed * t, (double)span);
+            int x = (int)wrap((double)(hx % (unsigned)scr_cols) + drift + sway, (double)scr_cols);
+            out[n++] = (Flake){x, y, q < 55 ? '.' : (q < 85 ? '*' : '\''), 0};
+        }
+    }
+
+    if (g_season.leaf > 0.02 && g_ncrowns > 0) {  // leaves coming off the crowns
+        int leaves = (int)(g_ncrowns * 6.0 * g_season.leaf);
+        if (leaves > 700) leaves = 700;
+        for (int i = 0; i < leaves && n < MAX_FLAKES; ++i) {
+            unsigned h1 = hash2(i, 0, 111), h2 = hash2(i, 0, 112), h3 = hash2(i, 0, 113);
+            const Crown *c = &g_crowns[h1 % (unsigned)g_ncrowns];
+            int row = (int)(h2 % (unsigned)c->ch);
+            int hw = crown_half(c->ch, row);
+            double x0 = (double)(c->cx + ox + (int)(h3 % (unsigned)(2 * hw + 1)) - hw);
+            double y0 = (double)(c->top + row + oy);
+            int ground_row = c->base + 2 + (int)((h2 >> 8) % 4);
+            int cap = c->base <= 23 ? 23 : 1000;  // an oak of the meadow drops its leaves on the meadow, not in the river
+            double ground = (double)((ground_row > cap ? cap : ground_row) + oy);
+            double speed = 0.7 + (double)((h3 >> 8) % 100) / 170.0;                // rows per second
+            double fall = (ground - y0) / speed;                                    // seconds in the air
+            double period = fall + 1.0 + (double)((h1 >> 8) % 70) / 10.0;           // then it waits for the next leaf
+            double age = wrap((double)(h1 >> 16) / 65536.0 * period + t, period);
+            if (age >= fall || age > 24.0) continue;
+            double sway = 3.0 * tri(age / (3.0 + (double)(h3 % 4)) + (double)(h2 % 1000) / 1000.0);
+            double push = wind_push_at(t) - wind_push_at(t - age);                  // the wind it has met on the way
+            double x = x0 + sway + g_wind_dir * (0.5 * age + 7.0 * push);
+            unsigned q = (h3 >> 20) % 100;
+            out[n++] = (Flake){(int)x, (int)(y0 + speed * age), q < 60 ? '~' : (q < 85 ? ',' : '\''), 1};
+        }
+    }
+
+    if (g_season.leaf > 0.15 && g_star_f < 0.4) {  // a flock of birds in a wedge, flying with the wind
+        long window = 80000, k = t_ms / window;
+        if (g_demo || hash2((int)k, 0, 121) % 100 < 55) {
+            long start = k * window + 4000 + (long)(hash2((int)k, 0, 122) % 30000);
+            long dt = t_ms - start;
+            if (dt >= 0 && dt < 30000) {
+                double p = (double)dt / 30000.0;
+                int dir = g_wind_dir;
+                int lead_x = dir > 0 ? (int)(-14.0 + p * (scr_cols + 28)) : (int)(scr_cols + 14 - p * (scr_cols + 28));
+                int avail = oy + 5 > 4 ? oy + 5 : 4;
+                int lead_y = 3 + (int)(hash2((int)k, 0, 123) % (unsigned)(avail - 2));
+                for (int b = 0; b < 7 && n < MAX_FLAKES; ++b) {
+                    int rank = (b + 1) / 2;
+                    int by = b == 0 ? lead_y : lead_y + (b % 2 ? rank : -rank);
+                    if (by < 0) continue;
+                    out[n++] = (Flake){lead_x - dir * 3 * rank, by, ((t_ms / 450) + b) % 2 ? 'v' : '^', 0};
+                }
+            }
+        }
+    }
+
+    if (g_star_f < 0.2 && g_season.snow < 0.05 && g_season.flowers > 0.25) {  // butterflies by day
+        int butterflies = (int)((double)scr_cols / 26.0 * g_season.flowers + 0.5);
+        if (butterflies < 1) butterflies = 1;
+        if (butterflies > 24) butterflies = 24;
+        for (int b = 0; b < butterflies && n + 1 < MAX_FLAKES; ++b) {
+            unsigned h1 = hash2(b, 0, 131), h2 = hash2(b, 0, 132);
+            double ph = (double)((h1 >> 10) % 1000) / 1000.0;
+            double x = (double)(h1 % (unsigned)scr_cols) + 6.0 * tri(t / 7.0 + ph) + 2.0 * tri(t / 2.6 + ph * 3.0);
+            double y = (double)(oy + 14 + (int)(h2 % 9)) + 1.6 * tri(t / 5.0 + ph * 2.0) + 0.6 * tri(t / 1.7 + ph);
+            int open = ((long)(t * 4.0) + b) % 2;
+            out[n++] = (Flake){(int)x, (int)y, open ? '}' : ')', 1};
+            out[n++] = (Flake){(int)x + 1, (int)y, open ? '{' : '(', 1};
+        }
+    }
+    return n;
+}
+
 // Paints the whole screen: static background, twinkling stars, smoke and flowing river.
 static void draw_scene(long t_ms) {
-    if (bg_rows != scr_rows || bg_cols != scr_cols) {
+    SkyClock clock;
+    sky_clock(t_ms, &clock);
+    season_update(&clock);
+    if (bg_rows != scr_rows || bg_cols != scr_cols || bg_key != g_season.key) {
         build_background();
     }
     int ox = (scr_cols - PIC_W) / 2, oy = (scr_rows - PIC_H) / 2;
@@ -823,9 +1369,10 @@ static void draw_scene(long t_ms) {
         exit(1);
     }
     double wind = wind_at(t_ms);
-    SkyClock clock;
-    sky_clock(t_ms, &clock);
+    wind_push_update(t_ms, wind);
     g_star_f = star_factor(&clock);
+    Flake flakes[MAX_FLAKES];
+    int n_flakes = weather(t_ms, ox, oy, flakes);
     SkyLine sky_lines[40];
     int n_sky = sky_sprites(t_ms, oy, wind, &clock, sky_lines);
     Fish fish = fish_at(t_ms);
@@ -840,6 +1387,10 @@ static void draw_scene(long t_ms) {
             long shift = river_step * (min(i, river_size - i - 1) + 1);
             for (int x = 0; x < scr_cols; ++x) {
                 row[x] = river_char(sy, (long)(x - ox) + shift + 1000000);
+                if (g_season.ice > 0.0 && hash2(x - ox, sy, 96) % 1000 < (unsigned)(g_season.ice * 1000.0)) {
+                    unsigned q = hash2(x - ox, sy, 97) % 100;  // frozen: this cell stands still and turns into ice
+                    row[x] = q < 70 ? '=' : (q < 92 ? '-' : '.');
+                }
             }
         } else {
             for (int x = 0; x < scr_cols; ++x) {
@@ -860,6 +1411,17 @@ static void draw_scene(long t_ms) {
             for (int k = 0; k < n_sky; ++k) {
                 if (sky_lines[k].y == y) paint_sky_line(row, bold, y, &sky_lines[k]);
             }
+            for (int k = 0; k < n_flakes; ++k) {  // snow and birds only through empty air; leaves and butterflies over the meadow too
+                const Flake *f = &flakes[k];
+                if (f->y == y && f->x >= 0 && f->x < scr_cols &&
+                    (row[f->x] == ' ' || (f->soft && soft_cell(row[f->x]) && !is_art(f->x - ox, sy)))) {  // never over the drawn picture
+                    row[f->x] = f->ch;
+                }
+            }
+        }
+        if (g_cat_y >= 0 && y == g_cat_y + CAT_EYE_ROW && cat_blinks(t_ms)) {
+            row[g_cat_x + 1] = '-';
+            row[g_cat_x + 3] = '-';
         }
         for (int k = 0; k < n_sprites; ++k) {
             const Sprite *sp = &sprites[k];
@@ -992,9 +1554,14 @@ static void run_scene() {
     while (!stop_looping) {
         long t = now_ms() - t0;
         int changed = sync_size();
+        SkyClock season_clock;
+        sky_clock(t, &season_clock);
+        season_update(&season_clock);
         long sig = (t / 350) * 2 + (t / 1100) % 2;
         if (fish_at(t).active || wabs(wind_at(t)) > 0.05) {
             sig += (t / 80) * 1000003L;  // repaint often while a fish is in the air or the wind blows
+        } else if (g_season.snow > 0.02 || g_season.leaf > 0.02 || g_season.flowers > 0.25) {
+            sig += (t / 160) * 1000003L;  // and fairly often while snow or leaves are falling
         }
         if (changed || sig != last_sig || t - last_paint >= 1000) {
             if (size_ok()) {
