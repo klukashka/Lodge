@@ -1,3 +1,11 @@
+lodge (0.2.2) stable; urgency=low
+
+  * Seasons: snow, ice, blossoms, falling leaves, birds and butterflies
+  * Leafy trees and a forest on the lower bank, layered mountains
+  * Winter: an even snow field, a blinking cat in a hat and a snowman
+
+ -- klukashka <klukin0202@yandex.ru>  Tue, 17 Nov 2026 12:00:00 +0000
+
 lodge (0.2.1) stable; urgency=low
 
   * Runs in the current terminal like sl and fits any terminal size
