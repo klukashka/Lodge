@@ -54,12 +54,13 @@ lodge
 - **The sky follows your clock.** Day and night with a sun, a bright moon and stars that fade in at dusk; the length of
   the day follows the season. A few clouds drift by.
 - **It is alive.** The river flows, the chimney smokes, now and then a gust of wind bends the smoke, sways the trees
-  and speeds up the clouds, and a fish jumps out of the river.
+  and speeds up the clouds, and a fish jumps out of the river. A cat sits by the hut (in a hat when the river is frozen); when a fish jumps
+  under the hut it runs down to the shore to watch, then goes back.
 - **It follows the seasons**, by the date and without any internet. Besides the pines there are leafy trees whose crowns
   change all year round:
   - *winter*: snow settles on the ground, the peaks and the pines, the leafy trees stand bare, snow falls slowly in
-    showers (rarely by day, more often at night), the river freezes over and the fish stays under the ice, a cat in a
-    hat sits by the hut and now and then blinks, and a snowman stands on the meadow at the right;
+    showers (rarely by day, more often at night), the river freezes over and the fish stays under the ice, the cat in a hat
+    sits by the hut and blinks, and a snowman stands on the meadow at the right;
   - *spring*: the leafy trees blossom, flowers open, butterflies wander over the meadow by day;
   - *summer*: dense foliage, tall grass full of flowers, butterflies by day;
   - *autumn*: the crowns turn and thin out, leaves come off the trees and the wind carries them down, they gather in

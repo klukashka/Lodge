@@ -32,6 +32,7 @@ static volatile sig_atomic_t stop_looping = 0;  // set by the signal handler, po
 static volatile sig_atomic_t hangup = 0;        // terminal is gone (SIGHUP): skip the farewell
 static volatile sig_atomic_t fast_exit = 0;     // a second Ctrl+C: skip the farewell animation
 static volatile sig_atomic_t interrupts = 0;    // how many Ctrl+C / SIGTERM arrived
+static long g_ev_off = 0;  // shifts the time of the wind, fish, cat and snow showers, chosen once per run: every start differs
 static int g_demo = 0;  // LODGE_DEMO=1: a gust in every wind window and a jump in every fish window
 static volatile sig_atomic_t need_redraw = 0;   // SIGWINCH / SIGCONT: repaint everything from scratch
 
@@ -303,6 +304,11 @@ static char snow_glyph(int sx, int sy) {
     return strokes[hash2(block, sy, 92) % 5];
 }
 
+// In autumn the flowers '@' die off: the further the season, the more of them are gone (all of them by the end of it).
+static int flower_gone(int sx, int sy) {
+    return g_season.phase == 2 && g_season.snow < 0.5 && hash2(sx, sy, 66) % 1000 >= (unsigned)(g_season.flowers * 1000.0);
+}
+
 // One cell of the generated meadow: snow in winter, lots of flowers and tall grass in summer, in autumn piles of
 // fallen leaves and puddles.
 static char meadow_cell(int sx, int sy) {
@@ -310,8 +316,8 @@ static char meadow_cell(int sx, int sy) {
     double leaf = g_season.leaf, flowers = g_season.flowers;
     if (leaf > 0.05) {
         unsigned c = hash2(sx, sy, 93) % 100;
-        if (hash2(sx / 6, sy / 3, 98) % 100 < (unsigned)(30.0 * leaf) + 4 && c < 70) {
-            return hash2(sx, sy, 99) % 4 ? '~' : '%';  // a pile of leaves
+        if (hash2(sx / 6, sy / 3, 98) % 100 < (unsigned)(3.0 * leaf) + 1 && c < 70) {
+            return hash2(sx, sy, 99) % 4 ? '~' : '%';  // a rare pile of leaves far from the trees (they lie under the trees: see place_litter)
         }
         int m = ((sx % 9) + 9) % 9;
         if (hash2(sx / 9, sy, 88) % 100 < (unsigned)(10.0 * leaf) && m >= 1 && m <= 7) return '_';  // a puddle
@@ -344,10 +350,8 @@ static char river_char(int sy, long k) {
 static void gen_cell(int sx, int sy, char *ch, unsigned char *sky) {
     *ch = ' ';
     *sky = 0;
-    if (sy >= PIC_H) {  // near bank in front of the river
-        unsigned h = hash2(sx, sy, 11) % 100;
-        *ch = h < 55 ? ',' : (h < 65 ? '\'' : (h < 72 ? '.' : (h < 74 ? '@' : ' ')));
-        if (snowy(sx, sy)) *ch = snow_glyph(sx, sy);
+    if (sy >= PIC_H) {  // near bank in front of the river: the same meadow as above
+        *ch = meadow_cell(sx, sy);
     } else if (sy == SHORE_UP || sy == SHORE_DOWN) {
         *ch = '`';
     } else if (sy >= RIVER_ROW_FIRST && sy <= RIVER_ROW_LAST) {
@@ -658,16 +662,13 @@ static void build_side(int ox, int oy, int side, int extent) {
     }
 }
 
-// Winter company: a cat in a hat sits by the hut and now and then blinks, a snowman with a broom stands on the bank
-// across the river. Both get a blank margin (the silhouette widened by one cell, up/down/left/right only).
-#define CAT_SX 6                 // scene x of the cat's left edge, its lowest row is scene row CAT_BASE
+// The cat (see cat_pose) sits by the hut all year round, in a hat while the river is frozen. In winter a snowman stands
+// on the meadow too. The snowman gets a blank margin (the silhouette widened by one cell, up/down/left/right only).
+#define CAT_SX 6                 // scene x of the cat's left edge at home, its lowest row is scene row CAT_BASE
 #define CAT_BASE 20
-#define CAT_EYE_ROW 2            // index of the row with the eyes
 #define MAN_SX 62                // right edge of the meadow, between the last pines and the picture's edge
 #define MAN_BASE 18
-static const char *const CAT_ROWS[] = {"  *   ", " /_\\  ", "(o.o) ", "=(w)= ", " (_)_)"};
 static const char *const MAN_ROWS[] = {"  _[_]_  ", "  (o,o)  ", ">-(   )-<", " (  :  ) ", "  `---'  "};
-static int g_cat_x = -1, g_cat_y = -1;  // screen position of the cat's first row and column, -1 = no cat
 
 static void stamp_pet(int ox, int oy, int sx, int base, const char *const *rows, int n, int mark) {
     int top = base - n + 1;
@@ -702,14 +703,8 @@ static void stamp_pet(int ox, int oy, int sx, int base, const char *const *rows,
 }
 
 static void place_winter_pets(int ox, int oy) {
-    g_cat_x = g_cat_y = -1;
     if (g_season.snow < 0.5) return;
-    int n_cat = (int)(sizeof CAT_ROWS / sizeof *CAT_ROWS), n_man = (int)(sizeof MAN_ROWS / sizeof *MAN_ROWS);
-    if (CAT_BASE - n_cat >= -oy && CAT_BASE + 1 + oy < scr_rows && CAT_SX - 1 + ox >= 0) {
-        stamp_pet(ox, oy, CAT_SX, CAT_BASE, CAT_ROWS, n_cat, 0);
-        g_cat_x = CAT_SX + ox;
-        g_cat_y = CAT_BASE - n_cat + 1 + oy;
-    }
+    int n_man = (int)(sizeof MAN_ROWS / sizeof *MAN_ROWS);
     if (MAN_BASE + 1 + oy < scr_rows && MAN_BASE - n_man - 1 + oy >= 0) {  // only when the whole snowman fits
         stamp_pet(ox, oy, MAN_SX, MAN_BASE, MAN_ROWS, n_man, 1);
     }
@@ -721,6 +716,34 @@ static int cat_blinks(long t_ms) {
     long start = 1000 + (long)(hash2((int)slot, 7, 301) % 4000);
     long in = t_ms - slot * 6000;
     return in >= start && in < start + 250;
+}
+
+// Fallen leaves lie mostly under the leafy trees, round the foot of the trunk: the nearer to the trunk, the thicker.
+// The litter only grows through the autumn (the crowns lose their leaves) and stays until the snow covers it, while the
+// leaves still falling (g_season.leaf) die away at the end of the season.
+static void place_litter(int ox, int oy) {
+    if (g_season.phase != 2 || g_season.snow >= 0.5) return;
+    double litter = (1.0 - g_season.foliage) / 0.9;  // 0 at the start of autumn, 1 when the crowns are bare
+    litter = litter < 0.0 ? 0.0 : (litter > 1.0 ? 1.0 : litter);
+    if (litter < 0.03) return;
+    double rx = 5.0 + 6.0 * litter, ry = 2.0 + 2.0 * litter;  // the litter spreads round the trunk as it grows
+    for (int i = 0; i < g_ncrowns; ++i) {
+        const Crown *c = &g_crowns[i];
+        for (int dy = 0; dy <= 4; ++dy) {
+            for (int dx = -11; dx <= 11; ++dx) {
+                if (dy == 0 && dx >= -1 && dx <= 1) continue;  // the trunk itself
+                int x = c->cx + dx + ox, y = c->base + dy + oy;
+                if (x < 0 || x >= scr_cols || y < 0 || y >= scr_rows || is_art(x - ox, y - oy)) continue;
+                size_t k = (size_t)y * scr_cols + x;
+                if (occ[k] && bg[k] != ' ') continue;  // not over a tree
+                double ex = dx / rx, ey = dy / ry, d2 = ex * ex + ey * ey;
+                if (d2 >= 1.0) continue;
+                if ((double)(hash2(x - ox, y - oy, 150) % 1000) / 1000.0 < (1.0 - d2) * (0.3 + 0.65 * litter)) {
+                    bg[k] = hash2(x - ox, y - oy, 151) % 4 ? '~' : '%';
+                }
+            }
+        }
+    }
 }
 
 static void build_background() {
@@ -748,6 +771,10 @@ static void build_background() {
                     a = '*';                                       // flowers under the snow
                 } else if (a == ',' && sy >= 12 && snowy(sx, sy)) {
                     a = snow_glyph(sx, sy);                        // the meadow of the picture gets the same snow as the rest
+                } else if (a == '@' && flower_gone(sx, sy)) {
+                    a = meadow_cell(sx, sy);                       // an autumn flower of the picture has withered
+                } else if (a == ',' && sy >= 12 && g_season.phase == 1 && g_season.snow < 0.5) {
+                    a = meadow_cell(sx, sy);                       // and in summer the same tall grass and flowers
                 }
                 bg[i] = a;
                 skym[i] = 0;
@@ -781,6 +808,7 @@ static void build_background() {
                                // they go first, and the forest of the bank leaves them their place
     place_winter_pets(ox, oy); // the snowman marks its place before the forest of the bank is planted
     place_bank_trees(ox, oy);  // trees on the lower bank
+    place_litter(ox, oy);      // autumn: the fallen leaves lie under the leafy trees
 }
 
 static double g_star_f = 1.0;  // 0 = broad daylight, 1 = night: how many of the stars are out
@@ -810,24 +838,20 @@ static char star_char(int sx, int sy, long t_ms) {
 
 typedef struct { int active; long dt; int x0; int row0; int h; int dir; } Fish;
 
-static Fish fish_at(long t_ms) {
-    Fish f = {0, 0, 0, 0, 3, 1};
+// Plans the jump of window k: where it starts and which way it goes. Returns 0 when the window has no jump (or the
+// river is frozen). A "hut jump" takes place under the hut, where the cat can run down to the shore to watch it.
+static int fish_plan(int k, Fish *f, long *start, int *hut) {
+    *f = (Fish){0, 0, 0, 0, 3, 1};
     if (g_season.ice >= 0.5) {
-        return f;  // the river is frozen over
+        return 0;  // the river is frozen over
     }
-    int k = (int)(t_ms / FISH_WINDOW_MS);
     if (!g_demo && hash2(k, 0, 51) % 100 >= 15) {
-        return f;  // only 15 windows out of 100 have a jump: about one a minute
+        return 0;  // only 15 windows out of 100 have a jump: about one a minute
     }
-    long start = (long)k * FISH_WINDOW_MS + 1500 + (long)(hash2(k, 0, 52) % 5500);
-    long dt = t_ms - start;
-    if (dt < 0 || dt >= FISH_EVENT_MS) {
-        return f;
-    }
-    f.active = 1;
-    f.dt = dt;
-    f.dir = hash2(k, 0, 55) % 2 ? 1 : -1;                   // left or right, equally likely
-    f.row0 = RIVER_ROW_LAST - (int)(hash2(k, 0, 54) % 2);  // takes off from one of the two lower river rows
+    *hut = hash2(k, 0, 56) % 100 < 40;
+    *start = (long)k * FISH_WINDOW_MS + 1500 + (long)(hash2(k, 0, 52) % (*hut ? 2000 : 5500));  // hut jumps start early: the cat must run and come back inside the window
+    f->dir = hash2(k, 0, 55) % 2 ? 1 : -1;                   // left or right, equally likely
+    f->row0 = RIVER_ROW_LAST - (int)(hash2(k, 0, 54) % 2);  // takes off from one of the two lower river rows
 
     // A tall jump needs open grass on one side of the picture, so the fish never crosses the hut and the trees.
     // `lo..hi` is where the jump may start counted as if it went right; a left jump starts FISH_DX further right.
@@ -835,18 +859,39 @@ static Fish fish_at(long t_ms) {
     int left_ok = ox >= room + 6, right_ok = scr_cols - ox - PIC_W >= room + 6;
     unsigned pick = hash2(k, 0, 53);
     int base;
-    if (left_ok || right_ok) {
+    if (*hut) {
+        base = ox + 2 + (int)(pick % 21);  // the whole jump stays between scene columns 2 and 37, under the hut
+        f->h = 3;
+    } else if (left_ok || right_ok) {
         int use_left = left_ok && (!right_ok || pick % 2 == 0);
         int region_start = use_left ? 3 : ox + PIC_W + 3;
         int region_end = use_left ? ox - 3 : scr_cols - 3;
         int span = region_end - region_start - FISH_DX - 8;
         base = region_start + 4 + (int)((pick / 2) % (unsigned)(span > 0 ? span : 1));
-        f.h = 6;
+        f->h = 6;
     } else {
         base = 6 + (int)(pick % (unsigned)(scr_cols > 36 + FISH_DX ? scr_cols - 30 - FISH_DX : 6));
-        f.h = 3;  // narrow screen: keep the low jump
+        f->h = 3;  // narrow screen: keep the low jump
     }
-    f.x0 = f.dir > 0 ? base : base + FISH_DX;
+    f->x0 = f->dir > 0 ? base : base + FISH_DX;
+    return 1;
+}
+
+static Fish fish_at(long t_ms) {
+    t_ms += g_ev_off;
+    Fish f;
+    long start;
+    int hut;
+    if (!fish_plan((int)(t_ms / FISH_WINDOW_MS), &f, &start, &hut)) {
+        return (Fish){0, 0, 0, 0, 3, 1};
+    }
+    long dt = t_ms - start;
+    if (dt < 0 || dt >= FISH_EVENT_MS) {
+        f.active = 0;
+        return f;
+    }
+    f.active = 1;
+    f.dt = dt;
     return f;
 }
 
@@ -894,6 +939,123 @@ static int fish_sprites(const Fish *f, int oy, Sprite *out) {
     return n;
 }
 
+// The cat. It sits by the hut (in a hat while the river is frozen). When a fish jumps under the hut it runs down to
+// the shore (first down, then along it), watches, and goes back the same way. Everything follows from the time.
+#define CAT_SHORE_BASE 23   // row the cat stands on at the shore
+static const char *const CAT_HAT[] = {"  *   ", " /_\\  ", "(o.o) ", "=(w)= ", " (_)_)"};
+static const char *const CAT_BARE[] = {"/\\_/\\ ", "(o.o) ", "=(w)= ", " (_)_)"};
+// Running along the shore the cat is the same cat, mirrored when it runs to the right (the paws alternate between two frames).
+typedef struct { int x, base, moving, dir, face; } CatPose;  // left edge, lowest row; dir: +1 runs right, -1 left, 0 up/down; face: +1 mirrored (looks right), -1 as drawn
+
+// Where the cat runs to, in scene columns, for the hut jump `f`; and which way it runs along the shore on the way there.
+static int cat_target(const Fish *f) {
+    int ox = (scr_cols - PIC_W) / 2;
+    int tx = f->x0 - ox + f->dir * (FISH_DX / 2) - 2;  // under the middle of the jump
+    tx = tx < 1 ? 1 : (tx > 14 ? 14 : tx);              // the shore stretch left of the hut
+    return tx == CAT_SX ? CAT_SX - 1 : tx;              // never straight down: then it would not turn
+}
+
+// The cat keeps the way it faced at its last stop: after a run to the left it sits looking left, after a run to the right
+// (or the way back from a run to the left) looking right. That is where the latest finished run left it.
+static int cat_last_face(int window) {
+    for (int k = window; k >= window - 300 && k >= 0; --k) {
+        Fish f;
+        long start;
+        int hut;
+        if (fish_plan(k, &f, &start, &hut) && hut) {
+            int out = cat_target(&f) > CAT_SX ? 1 : -1;
+            return -out;  // it came back the other way
+        }
+    }
+    return -1;
+}
+
+static CatPose cat_pose(long t_ms) {
+    t_ms += g_ev_off;
+    int k = (int)(t_ms / FISH_WINDOW_MS);
+    CatPose c = {CAT_SX, CAT_BASE, 0, 0, 0};
+    Fish f;
+    long start;
+    int hut;
+    if (!fish_plan(k, &f, &start, &hut) || !hut) {
+        c.face = cat_last_face(k);
+        return c;
+    }
+    int tx = cat_target(&f), out = tx > CAT_SX ? 1 : -1;
+    int down = CAT_SHORE_BASE - CAT_BASE, along = tx > CAT_SX ? tx - CAT_SX : CAT_SX - tx;
+    int steps = down + along;
+    long run = 300 + 70L * steps, t = t_ms - start - 300;  // t = 0 when the cat sets off
+    long s;
+    if (t < 0) {
+        c.face = cat_last_face(k - 1);
+        return c;
+    }
+    if (t >= 2 * run + 2000) {
+        c.face = -out;
+        return c;
+    }
+    if (t < run) s = t * steps / run;
+    else if (t < run + 2000) s = steps;
+    else s = steps - (t - run - 2000) * steps / run;
+    c.moving = s > 0 && s < steps && (t < run || t >= run + 2000);
+    int vy = s < down ? (int)s : down, vx = (int)s - vy;
+    c.base = CAT_BASE + vy;
+    c.x = CAT_SX + (tx > CAT_SX ? vx : -vx);
+    if (c.moving && s > down) c.dir = out * (t < run ? 1 : -1);  // along the shore: out or back
+    if (t < run) c.face = s > down || t >= run ? out : cat_last_face(k - 1);  // goes down first, still looking the old way
+    else if (t < run + 2000) c.face = out;
+    else c.face = -out;
+    return c;
+}
+
+static void span_of(const char *r, int *lo, int *hi) {
+    *lo = 1 << 20;
+    *hi = -1;
+    for (int k = 0; r[k] != '\0'; ++k) {
+        if (r[k] != ' ') {
+            if (k < *lo) *lo = k;
+            *hi = k;
+        }
+    }
+}
+
+// Paints the cat into screen row y: a blank margin around it (up/down/left/right), then the cat itself.
+static void draw_cat(char *row, int y, int ox, int oy, long t_ms, const CatPose *c, int hat) {
+    const char *const *rows = hat ? CAT_HAT : CAT_BARE;
+    int n = hat ? 5 : 4, eye = hat ? 2 : 1;
+    int i = y - oy - (c->base - n + 1);
+    char sprite[5][16];  // the cat as drawn now: paws and mirroring applied
+    for (int j = 0; j < n; ++j) {
+        snprintf(sprite[j], sizeof sprite[j], "%s", rows[j]);
+        if (c->moving && j == n - 1 && (t_ms / 150) % 2) snprintf(sprite[j], sizeof sprite[j], "(_)_) ");  // the paws
+        if (!hat && c->face > 0) {  // looks to the right: the mirror image of the cat as drawn
+            int len = (int)strlen(rows[j]);
+            char m[16];
+            for (int k = 0; k < len; ++k) {
+                char ch = sprite[j][len - 1 - k];
+                m[k] = ch == '(' ? ')' : ch == ')' ? '(' : ch == '/' ? '\\' : ch == '\\' ? '/' : ch;
+            }
+            m[len] = '\0';
+            memcpy(sprite[j], m, (size_t)len + 1);
+        }
+    }
+    for (int d = -1; d <= 1; ++d) {
+        int j = i + d, lo, hi;
+        if (j < 0 || j >= n) continue;
+        span_of(sprite[j], &lo, &hi);
+        for (int k = lo - (d == 0); k <= hi + (d == 0); ++k) {
+            int x = ox + c->x + k;
+            if (x >= 0 && x < scr_cols) row[x] = ' ';
+        }
+    }
+    if (i < 0 || i >= n) return;
+    if (i == eye && !c->moving && cat_blinks(t_ms)) sprite[i][1] = sprite[i][3] = '-';
+    for (int k = 0; sprite[i][k] != '\0'; ++k) {
+        int x = ox + c->x + k;
+        if (sprite[i][k] != ' ' && x >= 0 && x < scr_cols) row[x] = sprite[i][k];
+    }
+}
+
 // ---------------------------------------------------
 // Wind. A gust lasts a few seconds and always blows to the same side during one run; its strength rises and falls smoothly (smoothstep ramps),
 // so nothing ever jumps. Between gusts the air is still. Everything that sways reads wind_at(), which returns
@@ -916,18 +1078,31 @@ static int g_wind_dir = 1;  // +1 blows to the right, -1 to the left; chosen onc
 static void wind_init() {
     unsigned seed = (unsigned)time(NULL) * 2654435761u ^ (unsigned)getpid();
     g_wind_dir = (seed >> 16) % 2 ? 1 : -1;
+    g_ev_off = (long)((seed * 40503u >> 4) % 1200000u);  // up to 20 minutes into the pattern
+    const char *sh = getenv("LODGE_EVENT_SHIFT");        // milliseconds, for tests (0 = the old fixed start)
+    if (sh != NULL) g_ev_off = atol(sh);
     const char *d = getenv("LODGE_WIND_DIR");  // "left" or "right", for testing
     if (d != NULL && (d[0] == 'l' || d[0] == 'L')) g_wind_dir = -1;
     if (d != NULL && (d[0] == 'r' || d[0] == 'R')) g_wind_dir = 1;
 }
 
-static double wind_at(long t_ms) {
-    int k = (int)(t_ms / WIND_WINDOW_MS);
+// The gust of wind window k (in the shifted time of the events), if there is one.
+static int wind_gust(int k, long *start, long *dur) {
     if (!g_demo && hash2(k, 0, 61) % 100 >= 30) {
-        return 0.0;  // a calm window (3 windows out of 10 have a gust)
+        return 0;  // a calm window (3 windows out of 10 have a gust)
     }
-    long start = (long)k * WIND_WINDOW_MS + 1500 + (long)(hash2(k, 0, 62) % 3000);
-    long dur = 4000 + (long)(hash2(k, 0, 63) % 5000);
+    *start = (long)k * WIND_WINDOW_MS + 1500 + (long)(hash2(k, 0, 62) % 3000);
+    *dur = 4000 + (long)(hash2(k, 0, 63) % 5000);
+    return 1;
+}
+
+static double wind_at(long t_ms) {
+    t_ms += g_ev_off;
+    int k = (int)(t_ms / WIND_WINDOW_MS);
+    long start, dur;
+    if (!wind_gust(k, &start, &dur)) {
+        return 0.0;
+    }
     long dt = t_ms - start;
     if (dt < 0 || dt >= dur) {
         return 0.0;
@@ -1107,8 +1282,10 @@ static void season_update(const SkyClock *c) {
     g_season.snow = snow;
     g_season.leaf = leaf;
     g_season.flowers = flowers;
-    double ice = (snow - 0.45) / 0.5;
-    g_season.ice = ice < 0.0 ? 0.0 : (ice > 1.0 ? 1.0 : ice);
+    double ice = (snow - 0.45) / 0.5;  // in spring the ice goes with the snow
+    ice = ice < 0.0 ? 0.0 : (ice > 1.0 ? 1.0 : ice);
+    double freeze = d >= 262.0 ? ramp(d, 300.0, 342.0) : 0.0;  // in autumn the river starts to freeze in the second half of November
+    g_season.ice = freeze > ice ? freeze : ice;
     // The foliage of the deciduous trees: out in April and May, full until September, thinning to the end of November.
     double foliage = d <= 91.0 ? 0.0 : (d < 135.0 ? (d - 91.0) / 44.0 : (d <= 262.0 ? 1.0 : (d < 329.0 ? 1.0 - 0.9 * (d - 262.0) / 67.0 : 0.1 * (1.0 - ramp(d, 329.0, 350.0)))));
     g_season.foliage = foliage;
@@ -1236,14 +1413,14 @@ static void paint_sky_line(char *row, unsigned char *bold, int y, const SkyLine 
 static double snow_episode(long t_ms) {
     if (g_demo) return 1.0;
     const long window = 180000;
-    long k = t_ms / window;
+    long te = t_ms + g_ev_off, k = te / window;
     SkyClock c0;
-    sky_clock(k * window, &c0);
+    sky_clock(k * window - g_ev_off, &c0);  // the real time of the window start
     double p = 0.15 + 0.75 * star_factor(&c0);
     if ((double)(hash2((int)k, 0, 141) % 1000) / 1000.0 >= p) return 0.0;
     long len = 90000 + (long)(hash2((int)k, 0, 142) % 60000);
     long start = k * window + (long)(hash2((int)k, 0, 143) % (unsigned)(window - len));
-    long dt = t_ms - start;
+    long dt = te - start;
     if (dt < 0 || dt >= len) return 0.0;
     double edge = (double)(dt < len - dt ? dt : len - dt) / 20000.0;
     return edge >= 1.0 ? 1.0 : edge * edge * (3.0 - 2.0 * edge);
@@ -1288,28 +1465,50 @@ static int weather(long t_ms, int ox, int oy, Flake *out) {
     }
 
     if (g_season.leaf > 0.02 && g_ncrowns > 0) {  // leaves coming off the crowns
-        int leaves = (int)(g_ncrowns * 6.0 * g_season.leaf);
-        if (leaves > 700) leaves = 700;
-        for (int i = 0; i < leaves && n < MAX_FLAKES; ++i) {
-            unsigned h1 = hash2(i, 0, 111), h2 = hash2(i, 0, 112), h3 = hash2(i, 0, 113);
-            const Crown *c = &g_crowns[h1 % (unsigned)g_ncrowns];
-            int row = (int)(h2 % (unsigned)c->ch);
-            int hw = crown_half(c->ch, row);
-            double x0 = (double)(c->cx + ox + (int)(h3 % (unsigned)(2 * hw + 1)) - hw);
-            double y0 = (double)(c->top + row + oy);
-            int ground_row = c->base + 2 + (int)((h2 >> 8) % 4);
-            int cap = c->base <= 23 ? 23 : 1000;  // an oak of the meadow drops its leaves on the meadow, not in the river
-            double ground = (double)((ground_row > cap ? cap : ground_row) + oy);
-            double speed = 0.7 + (double)((h3 >> 8) % 100) / 170.0;                // rows per second
-            double fall = (ground - y0) / speed;                                    // seconds in the air
-            double period = fall + 1.0 + (double)((h1 >> 8) % 70) / 10.0;           // then it waits for the next leaf
-            double age = wrap((double)(h1 >> 16) / 65536.0 * period + t, period);
-            if (age >= fall || age > 24.0) continue;
-            double sway = 3.0 * tri(age / (3.0 + (double)(h3 % 4)) + (double)(h2 % 1000) / 1000.0);
-            double push = wind_push_at(t) - wind_push_at(t - age);                  // the wind it has met on the way
-            double x = x0 + sway + g_wind_dir * (0.5 * age + 7.0 * push);
-            unsigned q = (h3 >> 20) % 100;
-            out[n++] = (Flake){(int)x, (int)(y0 + speed * age), q < 60 ? '~' : (q < 85 ? ',' : '\''), 1};
+        // Calm weather: a few leaves come off now and then (30% of the old number). When a gust begins, an extra
+        // batch (150% of the old number) is torn off the crowns during its first part and carried on by the wind.
+        long te = t_ms + g_ev_off;
+        int calm = (int)(g_ncrowns * 6.0 * g_season.leaf * 0.30);
+        int gusty = (int)(g_ncrowns * 6.0 * g_season.leaf * 1.5);
+        if (calm > 300) calm = 300;
+        if (gusty > 1000) gusty = 1000;
+        int kw = (int)(te / WIND_WINDOW_MS);
+        for (int pass = 0; pass < 4; ++pass) {  // pass 0: the calm leaves; 1..3: the gusts of this and the two earlier windows
+            long gstart = 0, gdur = 0;
+            int count = calm, salt = 0;
+            if (pass > 0) {
+                int kk = kw - (pass - 1);
+                if (kk < 0 || !wind_gust(kk, &gstart, &gdur)) continue;
+                count = gusty;
+                salt = 1 + kk;
+            }
+            for (int i = 0; i < count && n < MAX_FLAKES; ++i) {
+                unsigned h1 = hash2(i, salt, 111), h2 = hash2(i, salt, 112), h3 = hash2(i, salt, 113);
+                const Crown *c = &g_crowns[h1 % (unsigned)g_ncrowns];
+                int row = (int)(h2 % (unsigned)c->ch);
+                int hw = crown_half(c->ch, row);
+                double x0 = (double)(c->cx + ox + (int)(h3 % (unsigned)(2 * hw + 1)) - hw);
+                double y0 = (double)(c->top + row + oy);
+                int ground_row = c->base + 2 + (int)((h2 >> 8) % 4);
+                int cap = c->base <= 23 ? 23 : 1000;  // an oak of the meadow drops its leaves on the meadow, not in the river
+                double ground = (double)((ground_row > cap ? cap : ground_row) + oy);
+                double speed = 0.7 + (double)((h3 >> 8) % 100) / 170.0;                // rows per second
+                double fall = (ground - y0) / speed;                                    // seconds in the air
+                double age;
+                if (pass == 0) {
+                    double period = fall + 1.0 + (double)((h1 >> 8) % 70) / 10.0;       // then it waits for the next leaf
+                    age = wrap((double)(h1 >> 16) / 65536.0 * period + t, period);
+                } else {
+                    long delay = (long)(hash2(i, salt, 114) % (unsigned)(gdur * 8 / 10));  // torn off during the first part of the gust
+                    age = (double)(te - (gstart + delay)) / 1000.0;
+                }
+                if (age < 0.0 || age >= fall || age > 24.0) continue;
+                double sway = 3.0 * tri(age / (3.0 + (double)(h3 % 4)) + (double)(h2 % 1000) / 1000.0);
+                double push = wind_push_at(t) - wind_push_at(t - age);                  // the wind it has met on the way
+                double x = x0 + sway + g_wind_dir * (0.5 * age + 7.0 * push);
+                unsigned q = (h3 >> 20) % 100;
+                out[n++] = (Flake){(int)x, (int)(y0 + speed * age), q < 60 ? '~' : (q < 85 ? ',' : '\''), 1};
+            }
         }
     }
 
@@ -1351,6 +1550,14 @@ static int weather(long t_ms, int ox, int oy, Flake *out) {
     return n;
 }
 
+// Whether the river cell is frozen (and stands still). The ice spreads in patches, starting from the banks: the two rows
+// next to the shores freeze first, the middle ones later; when the river is frozen over every cell is.
+static int river_frozen(int sx, int sy) {
+    double p = g_season.ice * ((sy == RIVER_ROW_FIRST || sy == RIVER_ROW_LAST) ? 1.6 : 1.0);
+    double u = 0.65 * (double)(hash2(floor_div(sx, 5), sy, 98) % 1000) / 1000.0 + 0.35 * (double)(hash2(sx, sy, 96) % 1000) / 1000.0;
+    return u < p;
+}
+
 // Paints the whole screen: static background, twinkling stars, smoke and flowing river.
 static void draw_scene(long t_ms) {
     SkyClock clock;
@@ -1376,6 +1583,7 @@ static void draw_scene(long t_ms) {
     SkyLine sky_lines[40];
     int n_sky = sky_sprites(t_ms, oy, wind, &clock, sky_lines);
     Fish fish = fish_at(t_ms);
+    CatPose cat = cat_pose(t_ms);
     Sprite sprites[MAX_SPRITES];
     int n_sprites = fish_sprites(&fish, oy, sprites);
 
@@ -1387,7 +1595,7 @@ static void draw_scene(long t_ms) {
             long shift = river_step * (min(i, river_size - i - 1) + 1);
             for (int x = 0; x < scr_cols; ++x) {
                 row[x] = river_char(sy, (long)(x - ox) + shift + 1000000);
-                if (g_season.ice > 0.0 && hash2(x - ox, sy, 96) % 1000 < (unsigned)(g_season.ice * 1000.0)) {
+                if (g_season.ice > 0.0 && river_frozen(x - ox, sy)) {
                     unsigned q = hash2(x - ox, sy, 97) % 100;  // frozen: this cell stands still and turns into ice
                     row[x] = q < 70 ? '=' : (q < 92 ? '-' : '.');
                 }
@@ -1419,10 +1627,7 @@ static void draw_scene(long t_ms) {
                 }
             }
         }
-        if (g_cat_y >= 0 && y == g_cat_y + CAT_EYE_ROW && cat_blinks(t_ms)) {
-            row[g_cat_x + 1] = '-';
-            row[g_cat_x + 3] = '-';
-        }
+        draw_cat(row, y, ox, oy, t_ms, &cat, g_season.ice >= 0.5);
         for (int k = 0; k < n_sprites; ++k) {
             const Sprite *sp = &sprites[k];
             int len = (int)strlen(sp->s);
@@ -1558,7 +1763,7 @@ static void run_scene() {
         sky_clock(t, &season_clock);
         season_update(&season_clock);
         long sig = (t / 350) * 2 + (t / 1100) % 2;
-        if (fish_at(t).active || wabs(wind_at(t)) > 0.05) {
+        if (fish_at(t).active || wabs(wind_at(t)) > 0.05 || cat_blinks(t) || cat_pose(t).moving) {
             sig += (t / 80) * 1000003L;  // repaint often while a fish is in the air or the wind blows
         } else if (g_season.snow > 0.02 || g_season.leaf > 0.02 || g_season.flowers > 0.25) {
             sig += (t / 160) * 1000003L;  // and fairly often while snow or leaves are falling
