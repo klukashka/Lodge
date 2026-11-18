@@ -1,3 +1,11 @@
+lodge (0.2.4) stable; urgency=low
+
+  * A sheep grazes on the lower bank (chews, walks along the bottom of the screen, gone in winter)
+  * Butterflies also fly over the lower bank
+  * Shorter sun rays
+
+ -- klukashka <klukin0202@yandex.ru>  Thu, 19 Nov 2026 12:00:00 +0000
+
 lodge (0.2.3) stable; urgency=low
 
   * Winter: a cat in a hat (it blinks) and a snowman; the cat runs to the shore when a fish jumps under the hut
