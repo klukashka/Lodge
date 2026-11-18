@@ -1056,6 +1056,92 @@ static void draw_cat(char *row, int y, int ox, int oy, long t_ms, const CatPose 
     }
 }
 
+// The sheep. It wanders along the very bottom of the screen (the lower bank, in front of the forest), walks to a spot,
+// grazes there for a while, walks on. Everything follows from the time alone: step j is "graze at spot j, then walk to
+// spot j+1"; spots are in abstract units (0..159) and scaled to the width of the screen, so a resize does not change
+// the timing. It is not there in winter.
+#define SHEEP_W 14
+#define SHEEP_UNITS 160
+#define SHEEP_MS_PER_UNIT 900
+typedef struct { int present; double x; int base, state, face; } SheepPose;  // state: 0 walks (frame A), 1 walks (B), 2 grazes, 3 grazes (the mouth changes)
+
+static const char *const SHEEP_BODY[3] = {"  @@@@@@@ (  )", " @@@@@@@@@/oo\\", " @@@@@@@@@\\__/"};
+static const char *const SHEEP_GRAZE_BODY[3] = {"  @@@@@@@     ", " @@@@@@@@@(  )", " @@@@@@@@@/oo\\"};  // the head is one row lower
+
+static SheepPose sheep_pose(long t_ms) {
+    SheepPose sp = {0, 0.0, 0, 0, 1};
+    int oy = (scr_rows - PIC_H) / 2;
+    sp.base = scr_rows - oy - 2;  // scene row of the legs: the bottom of the screen
+    if (g_season.snow >= 0.2 || sp.base - 3 < PIC_H + 1 || scr_cols < SHEEP_W + 4) return sp;  // winter, or no bank on screen
+    sp.present = 1;
+    long te = t_ms + g_ev_off;
+    long T = 0;
+    int prev = (int)(hash2(0, 0, 401) % SHEEP_UNITS);
+    for (int j = 0; j < 100000; ++j) {
+        int here = j == 0 ? prev : (int)(hash2(j, 0, 401) % SHEEP_UNITS);
+        int next = (int)(hash2(j + 1, 0, 401) % SHEEP_UNITS);
+        long graze = 8000 + (long)(hash2(j, 0, 402) % 12000);
+        int dist = next > here ? next - here : here - next;
+        long walk = (long)dist * SHEEP_MS_PER_UNIT;
+        double scale = (double)(scr_cols - SHEEP_W - 2) / (double)(SHEEP_UNITS - 1);
+        if (j > 0) {
+            int before = (int)(hash2(j - 1, 0, 401) % SHEEP_UNITS);
+            sp.face = here >= before ? 1 : -1;  // looks the way it came
+        }
+        if (te < T + graze) {
+            sp.x = 1.0 + here * scale;
+            sp.state = ((te - T) / 150) % 2 ? 3 : 2;  // chews fast, like the sheep in Minecraft
+            return sp;
+        }
+        T += graze;
+        if (te < T + walk) {
+            double u = (double)(te - T) / (double)walk;
+            sp.x = 1.0 + (here + (next - here) * u) * scale;
+            sp.face = next >= here ? 1 : -1;
+            sp.state = ((te - T) / 400) % 2;
+            return sp;
+        }
+        T += walk;
+    }
+    return sp;
+}
+
+// Paints the sheep into screen row y: a blank margin one cell wide at the sides, then the sheep.
+static void draw_sheep(char *row, int y, int oy, const SheepPose *sp) {
+    if (!sp->present) return;
+    char sprite[4][SHEEP_W + 3];
+    for (int j = 0; j < 3; ++j) snprintf(sprite[j], sizeof sprite[j], "%s", sp->state >= 2 ? SHEEP_GRAZE_BODY[j] : SHEEP_BODY[j]);
+    if (sp->state == 0) snprintf(sprite[3], sizeof sprite[3], "  ||    ||    ");
+    else if (sp->state == 1) snprintf(sprite[3], sizeof sprite[3], "  |/    |/    ");
+    else if (sp->state == 2) snprintf(sprite[3], sizeof sprite[3], "  ||    ||\\__/");
+    else snprintf(sprite[3], sizeof sprite[3], "  ||    ||\\==/");  // chewing: the mouth alternates
+    if (sp->face < 0) {  // looks to the left: the mirror image
+        for (int j = 0; j < 4; ++j) {
+            char m[SHEEP_W + 3];
+            for (int k = 0; k < SHEEP_W; ++k) {
+                char ch = sprite[j][SHEEP_W - 1 - k];
+                m[k] = ch == '/' ? '\\' : ch == '\\' ? '/' : ch == '(' ? ')' : ch == ')' ? '(' : ch;
+            }
+            m[SHEEP_W] = '\0';
+            memcpy(sprite[j], m, SHEEP_W + 1);
+        }
+    }
+    int i = y - oy - (sp->base - 3), left = (int)(sp->x + 0.5);
+    if (i < 0 || i >= 4) return;
+    {  // the blank margin is only one cell at the sides of every row: none above, under the legs or under the head
+        int lo, hi;
+        span_of(sprite[i], &lo, &hi);
+        for (int k = lo - 1; k <= hi + 1; ++k) {
+            int x = left + k;
+            if (x >= 0 && x < scr_cols) row[x] = ' ';
+        }
+    }
+    for (int k = 0; sprite[i][k] != '\0'; ++k) {
+        int x = left + k;
+        if (sprite[i][k] != ' ' && x >= 0 && x < scr_cols) row[x] = sprite[i][k];
+    }
+}
+
 // ---------------------------------------------------
 // Wind. A gust lasts a few seconds and always blows to the same side during one run; its strength rises and falls smoothly (smoothstep ramps),
 // so nothing ever jumps. Between gusts the air is still. Everything that sways reads wind_at(), which returns
@@ -1327,7 +1413,7 @@ static int sky_sprites(long t_ms, int oy, double wind, const SkyClock *c, SkyLin
         };
         // The rays get shorter on a low screen so that the whole sun stays above the central peaks at noon.
         int links = (oy - 4) / 2;
-        links = links < 1 ? 1 : (links > 3 ? 3 : links);
+        links = links < 1 ? 1 : (links > 2 ? 2 : links);  // at most two links: longer rays looked too long
         int mid = 2 + links, rows = 2 * mid + 1;  // row of the disc centre, number of rows of the sprite
         for (int r = 0; r < 11; ++r) {
             memset(sun[r], ' ', 21);
@@ -1541,7 +1627,10 @@ static int weather(long t_ms, int ox, int oy, Flake *out) {
             unsigned h1 = hash2(b, 0, 131), h2 = hash2(b, 0, 132);
             double ph = (double)((h1 >> 10) % 1000) / 1000.0;
             double x = (double)(h1 % (unsigned)scr_cols) + 6.0 * tri(t / 7.0 + ph) + 2.0 * tri(t / 2.6 + ph * 3.0);
-            double y = (double)(oy + 14 + (int)(h2 % 9)) + 1.6 * tri(t / 5.0 + ph * 2.0) + 0.6 * tri(t / 1.7 + ph);
+            int low_rows = scr_rows - (oy + 33);  // room under the river for the bank
+            int on_bank = b % 3 == 2 && low_rows >= 3;  // every third butterfly flies over the lower bank
+            double y0 = on_bank ? (double)(oy + 32 + (int)(h2 % (unsigned)(low_rows - 2))) : (double)(oy + 14 + (int)(h2 % 9));
+            double y = y0 + 1.6 * tri(t / 5.0 + ph * 2.0) + 0.6 * tri(t / 1.7 + ph);
             int open = ((long)(t * 4.0) + b) % 2;
             out[n++] = (Flake){(int)x, (int)y, open ? '}' : ')', 1};
             out[n++] = (Flake){(int)x + 1, (int)y, open ? '{' : '(', 1};
@@ -1584,6 +1673,7 @@ static void draw_scene(long t_ms) {
     int n_sky = sky_sprites(t_ms, oy, wind, &clock, sky_lines);
     Fish fish = fish_at(t_ms);
     CatPose cat = cat_pose(t_ms);
+    SheepPose sheep = sheep_pose(t_ms);
     Sprite sprites[MAX_SPRITES];
     int n_sprites = fish_sprites(&fish, oy, sprites);
 
@@ -1627,6 +1717,7 @@ static void draw_scene(long t_ms) {
                 }
             }
         }
+        draw_sheep(row, y, oy, &sheep);
         draw_cat(row, y, ox, oy, t_ms, &cat, g_season.ice >= 0.5);
         for (int k = 0; k < n_sprites; ++k) {
             const Sprite *sp = &sprites[k];
@@ -1763,7 +1854,7 @@ static void run_scene() {
         sky_clock(t, &season_clock);
         season_update(&season_clock);
         long sig = (t / 350) * 2 + (t / 1100) % 2;
-        if (fish_at(t).active || wabs(wind_at(t)) > 0.05 || cat_blinks(t) || cat_pose(t).moving) {
+        if (fish_at(t).active || wabs(wind_at(t)) > 0.05 || cat_blinks(t) || cat_pose(t).moving || sheep_pose(t).present) {
             sig += (t / 80) * 1000003L;  // repaint often while a fish is in the air or the wind blows
         } else if (g_season.snow > 0.02 || g_season.leaf > 0.02 || g_season.flowers > 0.25) {
             sig += (t / 160) * 1000003L;  // and fairly often while snow or leaves are falling
