@@ -49,19 +49,22 @@ lodge
 
 - **It runs right in your terminal**, like `sl`: Lodge takes over the whole screen and gives it back when you leave.
 - **It fits any terminal size.** The hand-drawn picture (74×30) stays in the middle, and the world around it —
-  mountains, pine forest, grass, the river and the near bank — is generated to fill whatever room there is. It does not
-  change when you resize the window, minimize it or bring it back.
+  mountains, pine forest, grass, the river and the near bank — is generated to fill whatever room there is. Resizing,
+  zooming, minimizing or bringing the window back only shows more or less of the same world: the trees, the sky, the
+  sheep, the fish, the snow, the birds and the butterflies stay where they were relative to the picture.
 - **The sky follows your clock.** Day and night with a sun, a bright moon and stars that fade in at dusk; the length of
-  the day follows the season. A few clouds drift by.
+  the day follows the season. A few clouds drift by; the sun and the moon travel along an arc above the picture.
 - **It is alive.** The river flows, the chimney smokes, now and then a gust of wind bends the smoke, sways the trees
   and speeds up the clouds, and a fish jumps out of the river. A cat sits by the hut (in a hat when the river is frozen); when a fish jumps
-  under the hut it runs down to the shore to watch, then goes back.
+  under the hut it runs down to the shore to watch, then goes back. On the lower bank a sheep grazes: it chews, now
+  and then walks along the bottom of the screen and is gone in winter (it needs a window of about 44 rows or more).
+  Animals walk behind the trees and bushes that stand nearer to you and in front of the ones that stand farther away.
 - **It follows the seasons**, by the date and without any internet. Besides the pines there are leafy trees whose crowns
   change all year round:
   - *winter*: snow settles on the ground, the peaks and the pines, the leafy trees stand bare, snow falls slowly in
-    showers (rarely by day, more often at night), the river freezes over and the fish stays under the ice, the cat in a hat
+    showers (rarely by day, more often at night), the river freezes over gradually from the banks and the fish stays under the ice, the cat in a hat
     sits by the hut and blinks, and a snowman stands on the meadow at the right;
-  - *spring*: the leafy trees blossom, flowers open, butterflies wander over the meadow by day;
+  - *spring*: the leafy trees blossom, flowers open, butterflies wander over the meadow and the lower bank by day;
   - *summer*: dense foliage, tall grass full of flowers, butterflies by day;
   - *autumn*: the crowns turn and thin out, leaves come off the trees and the wind carries them down, they gather in
     piles with puddles between, and a flock of birds crosses the sky in a wedge.
@@ -122,7 +125,8 @@ LODGE_AT="2026-07-01 07:30" LODGE_TIME_SCALE=40000000 lodge      # a whole year 
 One C program (`src/lodge.c`) draws every frame in memory with absolute cursor positions and repaints the whole screen,
 so a resize or a minimize can never leave a broken picture. The world around the hand-drawn picture is computed from
 coordinates alone (a hash, no random state), the sky from the system clock, and the wind and the fish from the elapsed
-time. A small launcher (`scripts/lodge`) finds the files next to itself, so the same package works from `/usr/local`, a
+time. Everything that moves is placed in the coordinates of the picture, then shifted by the window offset, so the
+window size never changes the scene. A small launcher (`scripts/lodge`) finds the files next to itself, so the same package works from `/usr/local`, a
 Homebrew prefix or anywhere else.
 
 ```
