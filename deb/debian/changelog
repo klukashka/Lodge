@@ -1,3 +1,11 @@
+lodge (0.2.5) stable; urgency=low
+
+  * Resizing or zooming the window only shows more or less of the same world: the sheep, fish, sun, moon, clouds, snow, birds and butterflies are tied to the picture
+  * The cat and the sheep walk behind trees that stand nearer to the viewer
+  * The sheep has wool horns, the smoke alternates faster in wind, narrower blank margins under the cat and tree crowns
+
+ -- klukashka <klukin0202@yandex.ru>  Thu, 19 Nov 2026 18:00:00 +0000
+
 lodge (0.2.4) stable; urgency=low
 
   * A sheep grazes on the lower bank (chews, walks along the bottom of the screen, gone in winter)
