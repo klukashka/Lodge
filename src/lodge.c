@@ -273,12 +273,35 @@ static void draw_notice() {
 #define SHORE_DOWN 29
 #define MAX_PEAKS 1024
 
+// Everything that moves over the scene (sun, moon, clouds, snow, birds, butterflies, fish, the sheep) is tied to the
+// picture, not to the window: positions are scene columns/rows, so resizing or zooming the window only shows more or
+// less of the same world. The world is WORLD_W columns wide, centred on the picture; SKY_TOP rows lie above it.
+#define WORLD_W 320
+#define WORLD_X0 ((PIC_W - WORLD_W) / 2)
+#define SKY_TOP 40
+
 static int line_len[LINES];       // real length of every picture row (the rest is padding)
 static char *bg = NULL;           // static background, one cell per screen cell
 static unsigned char *skym = NULL; // 1 = sky cell (stars may appear here)
 static int bg_rows = 0, bg_cols = 0;
 static unsigned char *occ = NULL;  // 1 = a tree stands here: bushes and stones keep away from it
 static int g_mark_occ = 0;         // while set, put_ext() also marks the cells it paints in occ
+static short *zb = NULL;           // for the cells in occ: the scene row of the foot of the object that stands there (-1: none)
+static int g_zbase = 0;            // the foot row of the object being drawn now
+
+// The trees of the lower bank decide whether they fit among the farther ones from this map of the whole scene (not of the
+// screen), so which trees stand where never depends on the size of the window. g_dry: draw_*() only fill this map.
+#define WOCC_X0 (-460)
+#define WOCC_W 1100
+#define WOCC_H 170
+static unsigned char wocc[WOCC_H * WOCC_W];
+static int g_dry = 0;
+
+// Depth: a moving thing (cat, sheep) with the foot on scene row `base` is hidden by a still object whose foot is lower
+// on the screen (nearer to us) and stands in front of it; on the same row or above, the moving thing is in front.
+static int hidden_at(int x, int y, int base) {
+    return zb != NULL && x >= 0 && x < scr_cols && y >= 0 && y < scr_rows && zb[(size_t)y * scr_cols + x] > base;
+}
 
 static unsigned hash2(int x, int y, unsigned salt) {
     unsigned h = (unsigned)x * 374761393u + (unsigned)y * 668265263u + salt * 2246822519u;
@@ -369,11 +392,18 @@ static void gen_cell(int sx, int sy, char *ch, unsigned char *sky) {
 
 // Puts a generated (non-picture) cell on the screen.
 static void put_ext(int ox, int oy, int sx, int sy, char ch, int solid) {
+    if (g_dry) {
+        if (g_mark_occ && sx >= WOCC_X0 && sx < WOCC_X0 + WOCC_W && sy >= 0 && sy < WOCC_H) wocc[sy * WOCC_W + (sx - WOCC_X0)] = 1;
+        return;
+    }
     int x = sx + ox, y = sy + oy;
     if (x < 0 || x >= scr_cols || y < 0 || y >= scr_rows || is_art(sx, sy)) return;
     bg[(size_t)y * scr_cols + x] = ch;
     if (solid) skym[(size_t)y * scr_cols + x] = 0;
-    if (g_mark_occ && occ != NULL) occ[(size_t)y * scr_cols + x] = 1;
+    if (g_mark_occ && occ != NULL) {
+        occ[(size_t)y * scr_cols + x] = 1;
+        zb[(size_t)y * scr_cols + x] = (short)g_zbase;
+    }
 }
 
 // `layer` 0 is the farthest range (sparse), 2 the nearest one (dense): the nearer a range is, the more `^` it has.
@@ -396,6 +426,7 @@ static void draw_mountain(int ox, int oy, int cx, int h, int base, int layer) {
 
 static void draw_tree(int ox, int oy, int cx, int h, int base) {
     g_mark_occ = 1;
+    g_zbase = base;
     for (int i = 0; i < h; ++i) {
         int r = base - h + i, l = cx - 1 - i, rr = cx + 1 + i;
         for (int x = l + 1; x < rr; ++x) {
@@ -465,6 +496,7 @@ static const char *const OAK_BARE[OAK_ROWS] = {
 // (the span of every row), so that the grass, the snow or the mountains behind it do not mix with the drawing.
 static void draw_oak(int ox, int oy, int cx, int base) {
     g_mark_occ = 1;
+    g_zbase = base;
     int top = base - (OAK_ROWS - 1);
     const char *const *tpl = g_season.foliage > 0.05 ? OAK_CROWN : OAK_BARE;
     for (int i = 0; i < OAK_ROWS; ++i) {
@@ -477,7 +509,10 @@ static void draw_oak(int ox, int oy, int cx, int base) {
         }
         for (int k = first; first >= 0 && k <= last; ++k) {
             for (int dy = -1; dy <= 1; ++dy) {
-                for (int dx = -1; dx <= 1; ++dx) put_ext(ox, oy, cx - 7 + k + dx, top + i + dy, ' ', 1);
+                for (int dx = -1; dx <= 1; ++dx) {
+                    if (dx != 0 && dy != 0) continue;  // a cross, not a box: under the crown the margin is one cell narrower on each side
+                    put_ext(ox, oy, cx - 7 + k + dx, top + i + dy, ' ', 1);
+                }
             }
         }
     }
@@ -497,7 +532,7 @@ static void draw_oak(int ox, int oy, int cx, int base) {
             }
         }
     }
-    if (g_ncrowns < MAX_CROWNS) g_crowns[g_ncrowns++] = (Crown){cx, top, 6, base};
+    if (!g_dry && g_ncrowns < MAX_CROWNS) g_crowns[g_ncrowns++] = (Crown){cx, top, 6, base};
     g_mark_occ = 0;
 }
 
@@ -529,6 +564,7 @@ static int plant_free(int ox, int oy, int left, int base, int n, int w) {
 static void draw_plant(int ox, int oy, int left, int base, const char *const *rows, int n, int w, int tight) {
     int top = base - (n - 1);
     g_mark_occ = 1;
+    g_zbase = base;
     for (int i = 0; i < n; ++i) {
         int first = -1, last = -1;
         for (int k = 0; k < w; ++k) {
@@ -590,7 +626,9 @@ static void place_plants(int ox, int oy, int bank) {
 // the band, the taller its pines. Every band is a walk through the scene from a fixed point (so a resize moves nothing);
 // the bands are drawn from the farthest to the nearest, so a nearer tree stands in front of a farther one.
 static void place_bank_trees(int ox, int oy) {
-    int x_end = scr_cols - ox + 14, x_vis = -ox - 16;
+    const int x_end = 560;  // the walk does not depend on the window: only what is on the screen gets drawn
+    int x_vis = -ox - 16, x_scr = scr_cols - ox + 14;
+    memset(wocc, 0, sizeof wocc);
     for (int band = 0; band < 14; ++band) {
         if (36 + 8 * band - 9 >= scr_rows - oy) break;  // the tops of this band are already below the screen
         int x = -420;
@@ -601,22 +639,23 @@ static void place_bank_trees(int ox, int oy) {
             int reach = oak ? 9 : h + 1;
             int base = 36 + 8 * band + (int)(h3 % 7);
             int cx = x + reach;
-            if (cx + reach >= x_vis) {
-                // The box of the tree: a pine is a triangle with the star above it, an oak is 15 cells wide and 8 rows high.
-                int x0 = oak ? cx - 8 : cx - h - 1, x1 = oak ? cx + 8 : cx + h + 1;
-                int y0 = oak ? base - 8 : base - h - 2, y1 = base + 1;
-                int seen = 1;
-                for (int sy = y0; sy <= y1 && seen; ++sy) {
-                    for (int sx = x0; sx <= x1; ++sx) {
-                        int bx = sx + ox, by = sy + oy;
-                        if (bx >= 0 && bx < scr_cols && by >= 0 && by < scr_rows && occ[(size_t)by * scr_cols + bx]) {
-                            seen = 0;  // a tree of a farther band stands here: never draw over it, that spoils both trees
-                            break;
-                        }
+            // The box of the tree: a pine is a triangle with the star above it, an oak is 15 cells wide and 8 rows high.
+            int x0 = oak ? cx - 8 : cx - h - 1, x1 = oak ? cx + 8 : cx + h + 1;
+            int y0 = oak ? base - 8 : base - h - 2, y1 = base + 1;
+            int seen = 1;
+            for (int sy = y0; sy <= y1 && seen; ++sy) {
+                for (int sx = x0; sx <= x1; ++sx) {
+                    if (sx >= WOCC_X0 && sx < WOCC_X0 + WOCC_W && sy >= 0 && sy < WOCC_H && wocc[sy * WOCC_W + (sx - WOCC_X0)]) {
+                        seen = 0;  // a tree of a farther band stands here: never draw over it, that spoils both trees
+                        break;
                     }
                 }
-                if (oak && base + oy >= scr_rows) seen = 0;  // a round crown without its trunk looks like a bush
-                if (seen) {
+            }
+            if (seen) {
+                g_dry = 1;  // first into the map of the whole scene, then (if it is on the screen) for real
+                if (oak) draw_oak(ox, oy, cx, base); else draw_tree(ox, oy, cx, h, base);
+                g_dry = 0;
+                if (cx + reach >= x_vis && cx - reach <= x_scr) {
                     if (oak) draw_oak(ox, oy, cx, base); else draw_tree(ox, oy, cx, h, base);
                 }
             }
@@ -687,7 +726,10 @@ static void stamp_pet(int ox, int oy, int sx, int base, const char *const *rows,
                 if (x >= 0 && x < scr_cols && y >= 0 && y < scr_rows) {
                     bg[(size_t)y * scr_cols + x] = ' ';
                     skym[(size_t)y * scr_cols + x] = 0;
-                    if (mark) occ[(size_t)y * scr_cols + x] = 1;
+                    if (mark) {
+                        occ[(size_t)y * scr_cols + x] = 1;
+                        zb[(size_t)y * scr_cols + x] = (short)base;
+                    }
                 }
             }
         }
@@ -751,10 +793,12 @@ static void build_background() {
     bg = realloc(bg, n);
     skym = realloc(skym, n);
     occ = realloc(occ, n);
-    if (bg == NULL || skym == NULL || occ == NULL) {
+    zb = realloc(zb, n * sizeof *zb);
+    if (bg == NULL || skym == NULL || occ == NULL || zb == NULL) {
         exit(1);
     }
     memset(occ, 0, n);
+    memset(zb, 0xFF, n * sizeof *zb);
     bg_rows = scr_rows;
     bg_cols = scr_cols;
     bg_key = g_season.key;
@@ -853,25 +897,22 @@ static int fish_plan(int k, Fish *f, long *start, int *hut) {
     f->dir = hash2(k, 0, 55) % 2 ? 1 : -1;                   // left or right, equally likely
     f->row0 = RIVER_ROW_LAST - (int)(hash2(k, 0, 54) % 2);  // takes off from one of the two lower river rows
 
-    // A tall jump needs open grass on one side of the picture, so the fish never crosses the hut and the trees.
-    // `lo..hi` is where the jump may start counted as if it went right; a left jump starts FISH_DX further right.
-    int ox = (scr_cols - PIC_W) / 2, room = FISH_DX + 12;
-    int left_ok = ox >= room + 6, right_ok = scr_cols - ox - PIC_W >= room + 6;
+    // Scene columns. A tall jump needs open grass on one side of the picture, so the fish never crosses the hut and the
+    // trees; a low jump may start anywhere along the river. A left jump starts FISH_DX further right.
     unsigned pick = hash2(k, 0, 53);
     int base;
     if (*hut) {
-        base = ox + 2 + (int)(pick % 21);  // the whole jump stays between scene columns 2 and 37, under the hut
+        base = 2 + (int)(pick % 21);  // the whole jump stays between scene columns 2 and 37, under the hut
         f->h = 3;
-    } else if (left_ok || right_ok) {
-        int use_left = left_ok && (!right_ok || pick % 2 == 0);
-        int region_start = use_left ? 3 : ox + PIC_W + 3;
-        int region_end = use_left ? ox - 3 : scr_cols - 3;
-        int span = region_end - region_start - FISH_DX - 8;
-        base = region_start + 4 + (int)((pick / 2) % (unsigned)(span > 0 ? span : 1));
+    } else if (pick % 3 == 0) {
+        base = -42 + (int)((pick / 3) % 30);   // open grass left of the picture
+        f->h = 6;
+    } else if (pick % 3 == 1) {
+        base = PIC_W + 4 + (int)((pick / 3) % 30);  // and right of it
         f->h = 6;
     } else {
-        base = 6 + (int)(pick % (unsigned)(scr_cols > 36 + FISH_DX ? scr_cols - 30 - FISH_DX : 6));
-        f->h = 3;  // narrow screen: keep the low jump
+        base = -40 + (int)((pick / 3) % (unsigned)(PIC_W + 80 - FISH_DX));
+        f->h = 3;
     }
     f->x0 = f->dir > 0 ? base : base + FISH_DX;
     return 1;
@@ -949,8 +990,7 @@ typedef struct { int x, base, moving, dir, face; } CatPose;  // left edge, lowes
 
 // Where the cat runs to, in scene columns, for the hut jump `f`; and which way it runs along the shore on the way there.
 static int cat_target(const Fish *f) {
-    int ox = (scr_cols - PIC_W) / 2;
-    int tx = f->x0 - ox + f->dir * (FISH_DX / 2) - 2;  // under the middle of the jump
+    int tx = f->x0 + f->dir * (FISH_DX / 2) - 2;  // under the middle of the jump
     tx = tx < 1 ? 1 : (tx > 14 ? 14 : tx);              // the shore stretch left of the hut
     return tx == CAT_SX ? CAT_SX - 1 : tx;              // never straight down: then it would not turn
 }
@@ -1019,7 +1059,7 @@ static void span_of(const char *r, int *lo, int *hi) {
     }
 }
 
-// Paints the cat into screen row y: a blank margin around it (up/down/left/right), then the cat itself.
+// Paints the cat into screen row y: a blank margin around it (up/left/right, none below), then the cat itself.
 static void draw_cat(char *row, int y, int ox, int oy, long t_ms, const CatPose *c, int hat) {
     const char *const *rows = hat ? CAT_HAT : CAT_BARE;
     int n = hat ? 5 : 4, eye = hat ? 2 : 1;
@@ -1039,40 +1079,42 @@ static void draw_cat(char *row, int y, int ox, int oy, long t_ms, const CatPose 
             memcpy(sprite[j], m, (size_t)len + 1);
         }
     }
-    for (int d = -1; d <= 1; ++d) {
+    for (int d = 0; d <= 1; ++d) {  // no margin under the cat (sprite row i+1 paints the margin above it)
         int j = i + d, lo, hi;
         if (j < 0 || j >= n) continue;
         span_of(sprite[j], &lo, &hi);
         for (int k = lo - (d == 0); k <= hi + (d == 0); ++k) {
             int x = ox + c->x + k;
-            if (x >= 0 && x < scr_cols) row[x] = ' ';
+            if (x >= 0 && x < scr_cols && !hidden_at(x, y, c->base)) row[x] = ' ';
         }
     }
     if (i < 0 || i >= n) return;
     if (i == eye && !c->moving && cat_blinks(t_ms)) sprite[i][1] = sprite[i][3] = '-';
     for (int k = 0; sprite[i][k] != '\0'; ++k) {
         int x = ox + c->x + k;
-        if (sprite[i][k] != ' ' && x >= 0 && x < scr_cols) row[x] = sprite[i][k];
+        if (sprite[i][k] != ' ' && x >= 0 && x < scr_cols && !hidden_at(x, y, c->base)) row[x] = sprite[i][k];
     }
 }
 
-// The sheep. It wanders along the very bottom of the screen (the lower bank, in front of the forest), walks to a spot,
-// grazes there for a while, walks on. Everything follows from the time alone: step j is "graze at spot j, then walk to
-// spot j+1"; spots are in abstract units (0..159) and scaled to the width of the screen, so a resize does not change
-// the timing. It is not there in winter.
+// The sheep. It wanders along a fixed line of the lower bank (scene row SHEEP_BASE), walks to a spot, grazes there for
+// a while, walks on. Everything follows from the time alone: step j is "graze at spot j, then walk to spot j+1". The
+// spots are scene columns (1 unit = 1 cell, SHEEP_UNITS of them, centred on the picture), so the sheep is tied to the
+// picture and does not move when the window is resized or zoomed: a narrower window only shows less of its walk. It is
+// not there in winter, nor when the screen has no room for the bank under that line.
 #define SHEEP_W 14
-#define SHEEP_UNITS 160
+#define SHEEP_UNITS 120
+#define SHEEP_BASE 35
 #define SHEEP_MS_PER_UNIT 900
 typedef struct { int present; double x; int base, state, face; } SheepPose;  // state: 0 walks (frame A), 1 walks (B), 2 grazes, 3 grazes (the mouth changes)
 
-static const char *const SHEEP_BODY[3] = {"  @@@@@@@ (  )", " @@@@@@@@@/oo\\", " @@@@@@@@@\\__/"};
-static const char *const SHEEP_GRAZE_BODY[3] = {"  @@@@@@@     ", " @@@@@@@@@(  )", " @@@@@@@@@/oo\\"};  // the head is one row lower
+static const char *const SHEEP_BODY[3] = {"  @@@@@@@ @  @", " @@@@@@@@@/oo\\"," @@@@@@@@@\\__/"};
+static const char *const SHEEP_GRAZE_BODY[3] = {"  @@@@@@@     ", " @@@@@@@@@@  @", " @@@@@@@@@/oo\\"};  // the head is one row lower
 
 static SheepPose sheep_pose(long t_ms) {
     SheepPose sp = {0, 0.0, 0, 0, 1};
     int oy = (scr_rows - PIC_H) / 2;
-    sp.base = scr_rows - oy - 2;  // scene row of the legs: the bottom of the screen
-    if (g_season.snow >= 0.2 || sp.base - 3 < PIC_H + 1 || scr_cols < SHEEP_W + 4) return sp;  // winter, or no bank on screen
+    sp.base = SHEEP_BASE;  // scene row of the legs
+    if (g_season.snow >= 0.2 || scr_rows - oy < SHEEP_BASE + 2) return sp;  // winter, or the bank is not on the screen
     sp.present = 1;
     long te = t_ms + g_ev_off;
     long T = 0;
@@ -1083,20 +1125,20 @@ static SheepPose sheep_pose(long t_ms) {
         long graze = 8000 + (long)(hash2(j, 0, 402) % 12000);
         int dist = next > here ? next - here : here - next;
         long walk = (long)dist * SHEEP_MS_PER_UNIT;
-        double scale = (double)(scr_cols - SHEEP_W - 2) / (double)(SHEEP_UNITS - 1);
+        const double scale = 1.0, x0 = (double)(PIC_W - SHEEP_W - SHEEP_UNITS) / 2.0;  // scene column of unit 0
         if (j > 0) {
             int before = (int)(hash2(j - 1, 0, 401) % SHEEP_UNITS);
             sp.face = here >= before ? 1 : -1;  // looks the way it came
         }
         if (te < T + graze) {
-            sp.x = 1.0 + here * scale;
+            sp.x = x0 + here * scale;
             sp.state = ((te - T) / 150) % 2 ? 3 : 2;  // chews fast, like the sheep in Minecraft
             return sp;
         }
         T += graze;
         if (te < T + walk) {
             double u = (double)(te - T) / (double)walk;
-            sp.x = 1.0 + (here + (next - here) * u) * scale;
+            sp.x = x0 + (here + (next - here) * u) * scale;
             sp.face = next >= here ? 1 : -1;
             sp.state = ((te - T) / 400) % 2;
             return sp;
@@ -1107,7 +1149,7 @@ static SheepPose sheep_pose(long t_ms) {
 }
 
 // Paints the sheep into screen row y: a blank margin one cell wide at the sides, then the sheep.
-static void draw_sheep(char *row, int y, int oy, const SheepPose *sp) {
+static void draw_sheep(char *row, int y, int ox, int oy, const SheepPose *sp) {
     if (!sp->present) return;
     char sprite[4][SHEEP_W + 3];
     for (int j = 0; j < 3; ++j) snprintf(sprite[j], sizeof sprite[j], "%s", sp->state >= 2 ? SHEEP_GRAZE_BODY[j] : SHEEP_BODY[j]);
@@ -1126,19 +1168,19 @@ static void draw_sheep(char *row, int y, int oy, const SheepPose *sp) {
             memcpy(sprite[j], m, SHEEP_W + 1);
         }
     }
-    int i = y - oy - (sp->base - 3), left = (int)(sp->x + 0.5);
+    int i = y - oy - (sp->base - 3), left = ox + (int)(sp->x + (sp->x >= 0 ? 0.5 : -0.5));
     if (i < 0 || i >= 4) return;
     {  // the blank margin is only one cell at the sides of every row: none above, under the legs or under the head
         int lo, hi;
         span_of(sprite[i], &lo, &hi);
         for (int k = lo - 1; k <= hi + 1; ++k) {
             int x = left + k;
-            if (x >= 0 && x < scr_cols) row[x] = ' ';
+            if (x >= 0 && x < scr_cols && !hidden_at(x, y, sp->base)) row[x] = ' ';
         }
     }
     for (int k = 0; sprite[i][k] != '\0'; ++k) {
         int x = left + k;
-        if (sprite[i][k] != ' ' && x >= 0 && x < scr_cols) row[x] = sprite[i][k];
+        if (sprite[i][k] != ' ' && x >= 0 && x < scr_cols && !hidden_at(x, y, sp->base)) row[x] = sprite[i][k];
     }
 }
 
@@ -1398,10 +1440,13 @@ static const char *const CLOUDS[3][3] = {
 };
 
 // Collects the lines of everything that hangs in the sky: sun, moon, clouds.
-static int sky_sprites(long t_ms, int oy, double wind, const SkyClock *c, SkyLine *out) {
+// The sun and the moon cross the sky over SKY_ARC_W scene columns around the picture, the clouds drift over the whole world;
+// rows are scene rows too (the sky sizes are those of the lowest screen), `ox`/`oy` only turn them into screen cells.
+#define SKY_ARC_X0 (-13)
+#define SKY_ARC_W 100
+static int sky_sprites(long t_ms, int ox, int oy, double wind, const SkyClock *c, SkyLine *out) {
     int n = 0;
-    int horizon = oy + 11, top = 2;
-    if (horizon < top + 3) horizon = top + 3;
+    int horizon = 11;
 
     if (c->hour >= c->rise && c->hour <= c->set) {  // sun: a solid disc with eight breathing rays
         static char sun[11][22];
@@ -1412,8 +1457,7 @@ static int sky_sprites(long t_ms, int oy, double wind, const SkyClock *c, SkyLin
             {6, -2, 2, -1, '/'}, {-6, 2, -2, 1, '/'}, {-6, -2, -2, -1, '\\'}, {6, 2, 2, 1, '\\'},
         };
         // The rays get shorter on a low screen so that the whole sun stays above the central peaks at noon.
-        int links = (oy - 4) / 2;
-        links = links < 1 ? 1 : (links > 2 ? 2 : links);  // at most two links: longer rays looked too long
+        int links = 1;  // the short rays of the lowest screen: the sun looks the same on every window
         int mid = 2 + links, rows = 2 * mid + 1;  // row of the disc centre, number of rows of the sprite
         for (int r = 0; r < 11; ++r) {
             memset(sun[r], ' ', 21);
@@ -1437,8 +1481,8 @@ static int sky_sprites(long t_ms, int oy, double wind, const SkyClock *c, SkyLin
         double u = (c->hour - c->rise) / (c->set - c->rise);
         int sun_top = mid;  // keeps the upper rays on the screen
         int sun_horizon = horizon > sun_top + 3 ? horizon : sun_top + 3;
-        int cx = (int)(u * (scr_cols - 1));
-        int cy = sun_horizon - (int)(4.0 * u * (1.0 - u) * (sun_horizon - sun_top) + 0.5);
+        int cx = ox + SKY_ARC_X0 + (int)(u * SKY_ARC_W);
+        int cy = oy + sun_horizon - (int)(4.0 * u * (1.0 - u) * (sun_horizon - sun_top) + 0.5);
         for (int r = 0; r < rows; ++r) out[n++] = (SkyLine){cx - 10, cy - mid + r, sun[r], 0};
     }
 
@@ -1451,10 +1495,9 @@ static int sky_sprites(long t_ms, int oy, double wind, const SkyClock *c, SkyLin
         double u = dn / night_len;
         double a = 2.0 * u - 1.0;
         double alt = 1.0 - a * a * a * a;  // a flat arc: high for most of the night, down at the horizon at both ends
-        int moon_horizon = oy + 5, moon_top = 2;
-        if (moon_horizon < moon_top + 3) moon_horizon = moon_top + 3;
-        int cx = (int)(u * (scr_cols - 1));
-        int cy = moon_horizon - (int)(alt * (moon_horizon - moon_top) + 0.5);
+        int moon_horizon = 5, moon_top = 2;
+        int cx = ox + SKY_ARC_X0 + (int)(u * SKY_ARC_W);
+        int cy = oy + moon_horizon - (int)(alt * (moon_horizon - moon_top) + 0.5);
         for (int r = 0; r < 5; ++r) out[n++] = (SkyLine){cx - 5, cy - 2 + r, moon[r], 1};
     }
 
@@ -1462,16 +1505,16 @@ static int sky_sprites(long t_ms, int oy, double wind, const SkyClock *c, SkyLin
     (void)wind;
     double cloud_boost = 2.5 * g_wind_push;
 
-    int clouds = 2 + (scr_cols >= 140) + (scr_cols >= 220);
-    int span = scr_cols + 48;
-    int avail = oy + 5 > 1 ? oy + 5 : 1;
+    int clouds = 5;               // over the whole world: about two on a window of the usual width
+    int span = WORLD_W + 48;
+    int avail = 14;               // scene rows -8..5: the clouds above the picture show on tall windows only
     for (int i = 0; i < clouds; ++i) {
         const char *const *shape = CLOUDS[hash2(i, 0, 81) % 3];
         double speed = 0.4 + (double)(hash2(i, 0, 82) % 35) / 100.0;  // cells per second
         double travel = speed * (double)t_ms / 1000.0 + cloud_boost;
         double x = wrap((double)(hash2(i, 0, 83) % (unsigned)span) + g_wind_dir * travel, (double)span);
-        int cx = (int)x - 24;
-        int cy = 1 + (i * avail) / clouds + (int)(hash2(i, 0, 84) % 2);
+        int cx = ox + WORLD_X0 + (int)x - 24;
+        int cy = oy - 8 + (i * avail) / clouds + (int)(hash2(i, 0, 84) % 2);
         for (int r = 0; r < 3; ++r) out[n++] = (SkyLine){cx, cy + r, shape[r], 0};
     }
     return n;
@@ -1530,7 +1573,7 @@ static int soft_cell(char c) {
 static int weather(long t_ms, int ox, int oy, Flake *out) {
     int n = 0;
     double t = (double)t_ms / 1000.0;
-    int total = scr_cols * scr_rows / 30;
+    int total = WORLD_W * (SKY_TOP + 18) / 17;  // as dense as before, over the whole world
     if (total > MAX_FLAKES) total = MAX_FLAKES;
 
     double snow_d = g_season.snow > 0.01 ? g_season.snow * (0.5 + 0.5 * (0.5 + 0.5 * tri(t / 90.0))) * snow_episode(t_ms) : 0.0;
@@ -1538,14 +1581,15 @@ static int weather(long t_ms, int ox, int oy, Flake *out) {
         for (int i = 0; i < total && n < MAX_FLAKES; ++i) {
             if (hash2(i, 0, 104) % 1000 >= (unsigned)(snow_d * 1000.0)) continue;
             unsigned hx = hash2(i, 0, 101), hy = hash2(i, 0, 102), hs = hash2(i, 0, 103);
-            int span = oy + 12 + (int)(hs % 12);  // the row where this flake lands, near the ground
+            int span = SKY_TOP + 12 + (int)(hs % 12);  // from SKY_TOP rows above the picture down to the row where this flake lands
             double phase = (double)(hx % 1000) / 1000.0;
             double speed = 0.45 * (0.9 + (double)((hs >> 8) % 100) / 100.0);  // rows per second: snow falls slowly
             double sway = 1.6 * tri(t / (3.0 + (double)((hs >> 16) % 4)) + phase);
             double drift = g_wind_dir * (0.4 * t + 4.0 * g_wind_push);
             unsigned q = (hs >> 20) % 100;
-            int y = (int)wrap((double)(hy % (unsigned)span) + speed * t, (double)span);
-            int x = (int)wrap((double)(hx % (unsigned)scr_cols) + drift + sway, (double)scr_cols);
+            int y = (int)wrap((double)(hy % (unsigned)span) + speed * t, (double)span) - SKY_TOP + oy;
+            int x = (int)wrap((double)(hx % (unsigned)WORLD_W) + drift + sway, (double)WORLD_W) + WORLD_X0 + ox;
+            if (x < 0 || x >= scr_cols || y < 0 || y >= scr_rows) continue;
             out[n++] = (Flake){x, y, q < 55 ? '.' : (q < 85 ? '*' : '\''), 0};
         }
     }
@@ -1606,9 +1650,8 @@ static int weather(long t_ms, int ox, int oy, Flake *out) {
             if (dt >= 0 && dt < 30000) {
                 double p = (double)dt / 30000.0;
                 int dir = g_wind_dir;
-                int lead_x = dir > 0 ? (int)(-14.0 + p * (scr_cols + 28)) : (int)(scr_cols + 14 - p * (scr_cols + 28));
-                int avail = oy + 5 > 4 ? oy + 5 : 4;
-                int lead_y = 3 + (int)(hash2((int)k, 0, 123) % (unsigned)(avail - 2));
+                int lead_x = ox + (dir > 0 ? (int)(-77.0 + p * 228.0) : (int)(151.0 - p * 228.0));  // across 200 scene columns
+                int lead_y = oy + (int)(hash2((int)k, 0, 123) % 9);
                 for (int b = 0; b < 7 && n < MAX_FLAKES; ++b) {
                     int rank = (b + 1) / 2;
                     int by = b == 0 ? lead_y : lead_y + (b % 2 ? rank : -rank);
@@ -1620,18 +1663,18 @@ static int weather(long t_ms, int ox, int oy, Flake *out) {
     }
 
     if (g_star_f < 0.2 && g_season.snow < 0.05 && g_season.flowers > 0.25) {  // butterflies by day
-        int butterflies = (int)((double)scr_cols / 26.0 * g_season.flowers + 0.5);
+        int butterflies = (int)((double)WORLD_W / 26.0 * g_season.flowers + 0.5);
         if (butterflies < 1) butterflies = 1;
         if (butterflies > 24) butterflies = 24;
         for (int b = 0; b < butterflies && n + 1 < MAX_FLAKES; ++b) {
             unsigned h1 = hash2(b, 0, 131), h2 = hash2(b, 0, 132);
             double ph = (double)((h1 >> 10) % 1000) / 1000.0;
-            double x = (double)(h1 % (unsigned)scr_cols) + 6.0 * tri(t / 7.0 + ph) + 2.0 * tri(t / 2.6 + ph * 3.0);
-            int low_rows = scr_rows - (oy + 33);  // room under the river for the bank
-            int on_bank = b % 3 == 2 && low_rows >= 3;  // every third butterfly flies over the lower bank
-            double y0 = on_bank ? (double)(oy + 32 + (int)(h2 % (unsigned)(low_rows - 2))) : (double)(oy + 14 + (int)(h2 % 9));
+            double x = (double)(ox + WORLD_X0 + (int)(h1 % (unsigned)WORLD_W)) + 6.0 * tri(t / 7.0 + ph) + 2.0 * tri(t / 2.6 + ph * 3.0);
+            int on_bank = b % 3 == 2;  // every third butterfly flies over the lower bank (scene rows 32..37)
+            double y0 = on_bank ? (double)(oy + 32 + (int)(h2 % 6)) : (double)(oy + 14 + (int)(h2 % 9));
             double y = y0 + 1.6 * tri(t / 5.0 + ph * 2.0) + 0.6 * tri(t / 1.7 + ph);
             int open = ((long)(t * 4.0) + b) % 2;
+            if (x < -2 || x >= scr_cols || y < 0 || y >= scr_rows) continue;
             out[n++] = (Flake){(int)x, (int)y, open ? '}' : ')', 1};
             out[n++] = (Flake){(int)x + 1, (int)y, open ? '{' : '(', 1};
         }
@@ -1656,7 +1699,7 @@ static void draw_scene(long t_ms) {
         build_background();
     }
     int ox = (scr_cols - PIC_W) / 2, oy = (scr_rows - PIC_H) / 2;
-    int smoke_alt = (int)((t_ms / 1100) % 2);
+    int smoke_alt = (int)((t_ms / (wabs(wind_at(t_ms)) > 0.05 ? 550 : 1100)) % 2);  // the smoke alternates twice as fast in the wind
     long river_step = t_ms / 350;
     int river_size = RIVER_ROW_LAST - RIVER_ROW_FIRST + 1;
     char *row = malloc((size_t)scr_cols);
@@ -1670,8 +1713,9 @@ static void draw_scene(long t_ms) {
     Flake flakes[MAX_FLAKES];
     int n_flakes = weather(t_ms, ox, oy, flakes);
     SkyLine sky_lines[40];
-    int n_sky = sky_sprites(t_ms, oy, wind, &clock, sky_lines);
+    int n_sky = sky_sprites(t_ms, ox, oy, wind, &clock, sky_lines);
     Fish fish = fish_at(t_ms);
+    fish.x0 += ox;  // the plan is in scene columns
     CatPose cat = cat_pose(t_ms);
     SheepPose sheep = sheep_pose(t_ms);
     Sprite sprites[MAX_SPRITES];
@@ -1717,7 +1761,7 @@ static void draw_scene(long t_ms) {
                 }
             }
         }
-        draw_sheep(row, y, oy, &sheep);
+        draw_sheep(row, y, ox, oy, &sheep);
         draw_cat(row, y, ox, oy, t_ms, &cat, g_season.ice >= 0.5);
         for (int k = 0; k < n_sprites; ++k) {
             const Sprite *sp = &sprites[k];
