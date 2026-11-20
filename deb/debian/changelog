@@ -1,3 +1,9 @@
+lodge (0.2.6) stable; urgency=low
+
+  * Flocks of birds in autumn are rarer (about one in four windows instead of more than half)
+
+ -- klukashka <klukin0202@yandex.ru>  Fri, 20 Nov 2026 12:00:00 +0000
+
 lodge (0.2.5) stable; urgency=low
 
   * Resizing or zooming the window only shows more or less of the same world: the sheep, fish, sun, moon, clouds, snow, birds and butterflies are tied to the picture
