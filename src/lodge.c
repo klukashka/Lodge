@@ -1644,7 +1644,7 @@ static int weather(long t_ms, int ox, int oy, Flake *out) {
 
     if (g_season.leaf > 0.15 && g_star_f < 0.4) {  // a flock of birds in a wedge, flying with the wind
         long window = 80000, k = t_ms / window;
-        if (g_demo || hash2((int)k, 0, 121) % 100 < 55) {
+        if (g_demo || hash2((int)k, 0, 121) % 100 < 25) {
             long start = k * window + 4000 + (long)(hash2((int)k, 0, 122) % 30000);
             long dt = t_ms - start;
             if (dt >= 0 && dt < 30000) {
