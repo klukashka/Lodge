@@ -1,3 +1,9 @@
+lodge (0.3.0) stable; urgency=low
+
+  * Windows 10 and 11: the release has lodge-0.3.0-windows-x64.zip with lodge.exe
+
+ -- klukashka <klukin0202@yandex.ru>  Thu, 26 Nov 2026 12:00:00 +0000
+
 lodge (0.2.6) stable; urgency=low
 
   * Flocks of birds in autumn are rarer (about one in four windows instead of more than half)
