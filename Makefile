@@ -20,7 +20,12 @@ SRC := src/lodge.c
 INC := include
 TEXTS := texts
 
-.PHONY: all clean install uninstall pkg deb
+# Windows: cross-compiled with mingw-w64 (macOS: brew install mingw-w64; Ubuntu: apt install mingw-w64).
+WINCC ?= x86_64-w64-mingw32-gcc
+WINDIR_OUT := build/windows/lodge
+WINZIP := lodge-$(VERSION)-windows-x64.zip
+
+.PHONY: all clean install uninstall pkg deb windows
 
 all: $(BIN)
 
@@ -41,9 +46,19 @@ uninstall:
 pkg:
 	./macos/build-pkg.sh $(VERSION)
 
+# Windows archive: lodge-<version>-windows-x64.zip (lodge.exe with the pictures next to it)
+windows:
+	rm -rf build/windows "$(WINZIP)"
+	mkdir -p "$(WINDIR_OUT)/texts"
+	$(WINCC) -O2 -Wall -Wextra -static -DLODGE_VERSION=\"$(VERSION)\" -I$(INC) $(SRC) -o "$(WINDIR_OUT)/lodge.exe"
+	cp -R "$(TEXTS)/." "$(WINDIR_OUT)/texts/"
+	cp LICENSE "$(WINDIR_OUT)/"
+	cd build/windows && zip -qr "../../$(WINZIP)" lodge
+
 # Debian/Ubuntu package: lodge_<version>_<arch>.deb in the repository root
 deb:
 	./deb/build-deb.sh $(VERSION)
 
 clean:
-	rm -f "$(BIN)" lodge-*.pkg
+	rm -f "$(BIN)" lodge-*.pkg lodge-*-windows-x64.zip
+	rm -rf build/windows

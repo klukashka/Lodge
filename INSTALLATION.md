@@ -1,6 +1,6 @@
 # Installing Lodge
 
-Pick one way. After any of them just run `lodge`.
+Pick one way. After any of them just run `lodge` (on Windows: `lodge.exe`).
 
 * ## Homebrew (macOS and Linux) — recommended
 
@@ -60,6 +60,21 @@ Pick one way. After any of them just run `lodge`.
 
     3. Run `lodge`. To update, install the newer package the same way. To remove it: `sudo apt remove lodge`.
 
+* ## Windows 10 and 11 (.zip)
+
+    1. Download `lodge-<version>-windows-x64.zip` from the
+       [latest release](https://github.com/klukashka/Lodge/releases/latest) and unpack it anywhere
+       (right-click → **Extract All**).
+
+    2. Open the unpacked `lodge` folder and run `lodge.exe`: double click it, or type `.\lodge.exe` in Windows
+       Terminal or PowerShell. Keep the `texts` folder next to the program.
+
+    3. The program is not signed, so SmartScreen may stop it the first time: **More info → Run anyway**.
+
+    To type just `lodge` from anywhere, add the folder to your `Path` (Settings → search for “environment variables”).
+    To update, replace the folder with the newer one; to remove Lodge, delete the folder. It writes nothing else on the
+    computer.
+
 * ## From the sources
 
     ```
@@ -104,13 +119,20 @@ Pick one way. After any of them just run `lodge`.
 
     4. The built `lodge_<version>_<arch>.deb` appears in the repository root. Install it as described above.
 
+* ## Windows (.zip)
+
+    Built on macOS or Linux with mingw-w64 (`brew install mingw-w64`, or `sudo apt install gcc-mingw-w64-x86-64 zip`):
+    run `make windows`, and `lodge-<version>-windows-x64.zip` appears in the repository root. The `windows` GitHub
+    workflow builds it the same way and runs it on Windows.
+
 # For maintainers: publishing a release
 
 The version lives in the `VERSION` file and is used by the Makefile, the `.deb`, the `.pkg` and the formula.
 
 1. Raise the number in `VERSION`, add an entry to `deb/debian/changelog`, commit.
 2. Tag it and push the tag: `git tag v<version> && git push origin v<version>`.
-   The GitHub workflow checks that the tag matches `VERSION`, builds the `.pkg` and the `.deb`, attaches them to the
+   The GitHub workflow checks that the tag matches `VERSION`, builds the `.pkg`, the `.deb` and the Windows `.zip`,
+   tries the program on Windows, attaches them to the
    release and updates the Homebrew tap.
 3. One-time setup of the tap:
    - create an empty public repository `klukashka/homebrew-lodge` (Homebrew requires the `homebrew-` prefix);

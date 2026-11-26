@@ -34,8 +34,12 @@ jobs:
       - uses: actions/upload-artifact@v4
         with: { name: deb, path: "lodge_*.deb" }
 
+  windows:
+    needs: check-version
+    uses: ./.github/workflows/windows.yml
+
   publish:
-    needs: [macos, deb]
+    needs: [macos, deb, windows]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4

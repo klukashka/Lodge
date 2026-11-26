@@ -6,13 +6,21 @@
 #include <time.h>
 #include <sys/types.h>
 #include "landscape.h"
-#include <termios.h>
 #include <signal.h>
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#else
+#include <termios.h>
 #include <sys/ioctl.h>
 #include <poll.h>
+#endif
 
+#ifndef _WIN32
 struct termios oldt, newt;
 static int input_saved = 0;   // oldt holds the original terminal settings
+#endif
 static int screen_active = 0; // alternate screen is on and the cursor is hidden
 
 #define min(x, y) ((x) < (y) ? (x) : (y))
@@ -36,16 +44,24 @@ static long g_ev_off = 0;  // shifts the time of the wind, fish, cat and snow sh
 static int g_demo = 0;  // LODGE_DEMO=1: a gust in every wind window and a jump in every fish window
 static volatile sig_atomic_t need_redraw = 0;   // SIGWINCH / SIGCONT: repaint everything from scratch
 
+#ifdef _WIN32
+#include "platform_win.h"
+#endif
+
 // --------------------------------------------------
 
 static void print_help(const char *argv0) {
     printf("Lodge %s\n\n", LODGE_VERSION);
     printf("Usage:\n");
+#ifdef _WIN32
+    printf("  %s\n", argv0);
+#endif
     printf("  %s <landscape_file> <message_file>\n", argv0);
     printf("  %s --help\n", argv0);
     printf("  %s --version\n", argv0);
 }
 
+#ifndef _WIN32
 // Only Ctrl+C (SIGINT) is allowed to reach the program: every other key is swallowed silently.
 void disable_input() {
     if (tcgetattr(STDIN_FILENO, &oldt) != 0) {
@@ -77,6 +93,7 @@ void restore_input() {
         input_saved = 0;
     }
 }
+#endif
 
 // Terminal modes while the scene runs: hidden cursor, no auto-wrap (so the last cell of a row can be painted safely),
 // mouse reporting (1000/1006) so the wheel and clicks go to us instead of scrolling the terminal's history, and
@@ -104,6 +121,7 @@ void cleanup() {
     restore_input();
 }
 
+#ifndef _WIN32
 // Everything typed, clicked or scrolled is read and thrown away, so it never piles up in the tty queue.
 static void drain_input() {
     struct pollfd p = {STDIN_FILENO, POLLIN, 0};
@@ -121,6 +139,18 @@ static long now_ms() {
     return (long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }
 
+// The size of the terminal. Returns 0 when it is unknown.
+static int term_size(int *rows, int *cols) {
+    struct winsize ws;
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) != 0 || ws.ws_row == 0 || ws.ws_col == 0) {
+        return 0;
+    }
+    *rows = ws.ws_row;
+    *cols = ws.ws_col;
+    return 1;
+}
+#endif
+
 // Sleeps up to `ms` milliseconds, but wakes up quickly once a stop was requested.
 static void sleep_ms(int ms) {
     while (ms > 0 && !stop_looping) {
@@ -134,22 +164,23 @@ static void sleep_ms(int ms) {
 // Terminals that start (or are switched) to full screen resize shortly after launch;
 // wait until the size stops changing so the animation is laid out for the final size.
 static void wait_for_stable_size() {
-    struct winsize last, cur;
-    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &last) != 0) {
+    int rows, cols, last_rows, last_cols;
+    if (!term_size(&last_rows, &last_cols)) {
         return;
     }
     int stable_ms = 0, waited_ms = 0;
     while (stable_ms < 500 && waited_ms < 4000 && !stop_looping) {
         usleep(50000);
         waited_ms += 50;
-        if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &cur) != 0) {
+        if (!term_size(&rows, &cols)) {
             return;
         }
-        if (cur.ws_row == last.ws_row && cur.ws_col == last.ws_col) {
+        if (rows == last_rows && cols == last_cols) {
             stable_ms += 50;
         } else {
             stable_ms = 0;
-            last = cur;
+            last_rows = rows;
+            last_cols = cols;
         }
     }
 }
@@ -207,11 +238,10 @@ static int scr_rows = 0, scr_cols = 0;
 // Re-reads the terminal size. Returns 1 when the screen must be repainted from scratch
 // (size changed, SIGWINCH or SIGCONT arrived); the clear sequence is queued in the frame buffer.
 static int sync_size() {
-    struct winsize ws;
-    int rows = 24, cols = 80;
-    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_row > 0 && ws.ws_col > 0) {
-        rows = ws.ws_row;
-        cols = ws.ws_col;
+    int rows, cols;
+    if (!term_size(&rows, &cols)) {
+        rows = 24;
+        cols = 80;
     }
     if (rows != scr_rows || cols != scr_cols || need_redraw) {
         scr_rows = rows;
@@ -1890,18 +1920,19 @@ static void render_bye() {
 // so a corrupted or forgotten screen heals by itself.
 static void run_scene() {
     long t0 = now_ms();
-    long last_sig = -1, last_paint = -1000000;
+    long long last_sig = -1;  // 64 bits: a `long` is only 32 on Windows
+    long last_paint = -1000000;
     while (!stop_looping) {
         long t = now_ms() - t0;
         int changed = sync_size();
         SkyClock season_clock;
         sky_clock(t, &season_clock);
         season_update(&season_clock);
-        long sig = (t / 350) * 2 + (t / 1100) % 2;
+        long long sig = (t / 350) * 2 + (t / 1100) % 2;
         if (fish_at(t).active || wabs(wind_at(t)) > 0.05 || cat_blinks(t) || cat_pose(t).moving || sheep_pose(t).present) {
-            sig += (t / 80) * 1000003L;  // repaint often while a fish is in the air or the wind blows
+            sig += (t / 80) * 1000003LL;  // repaint often while a fish is in the air or the wind blows
         } else if (g_season.snow > 0.02 || g_season.leaf > 0.02 || g_season.flowers > 0.25) {
-            sig += (t / 160) * 1000003L;  // and fairly often while snow or leaves are falling
+            sig += (t / 160) * 1000003LL;  // and fairly often while snow or leaves are falling
         }
         if (changed || sig != last_sig || t - last_paint >= 1000) {
             if (size_ok()) {
@@ -1918,6 +1949,7 @@ static void run_scene() {
     }
 }
 
+#ifndef _WIN32
 // Async-signal-safe: only raises flags. Everything else happens in main().
 void handle_signal(int signal) {
     if (signal == SIGHUP) {
@@ -1933,23 +1965,7 @@ void handle_signal(int signal) {
     }
 }
 
-int main(int argc, char *argv[]) {
-    if (argc == 2 && (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0)) {
-        print_help(argv[0]);
-        return 0;
-    }
-    if (argc == 2 && (strcmp(argv[1], "--version") == 0 || strcmp(argv[1], "-V") == 0)) {
-        printf("%s\n", LODGE_VERSION);
-        return 0;
-    }
-    if (argc != 3) {
-        print_help(argv[0]);
-        return 1;
-    }
-
-    disable_input();
-    atexit(cleanup);
-
+static void install_handlers(void) {
     signal(SIGINT, handle_signal);
     signal(SIGTERM, handle_signal);
     signal(SIGHUP, handle_signal);
@@ -1960,9 +1976,47 @@ int main(int argc, char *argv[]) {
 #ifdef SIGINFO
     signal(SIGINFO, SIG_IGN);
 #endif
+}
+#endif
 
+int main(int argc, char *argv[]) {
+    if (argc == 2 && (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0)) {
+        print_help(argv[0]);
+        return 0;
+    }
+    if (argc == 2 && (strcmp(argv[1], "--version") == 0 || strcmp(argv[1], "-V") == 0)) {
+        printf("%s\n", LODGE_VERSION);
+        return 0;
+    }
+#ifdef _WIN32
+    // There is no launcher script on Windows: without arguments the pictures come from the folder next to lodge.exe.
+    static char default_landscape[] = "texts\\lodge_pic.txt", default_message[] = "texts\\message.txt";
+    if (argc != 1 && argc != 3) {
+        print_help(argv[0]);
+        return 1;
+    }
+    if (argc == 1 && !enter_exe_dir()) {
+        fprintf(stderr, "lodge: cannot find the folder of lodge.exe\n");
+        return 1;
+    }
+    landscape_file = argc == 3 ? argv[1] : default_landscape;
+    message_file = argc == 3 ? argv[2] : default_message;
+    if (!console_prepare()) {
+        fprintf(stderr, "lodge: needs a Windows 10 or later console (Windows Terminal, PowerShell or cmd)\n");
+        return 1;
+    }
+#else
+    if (argc != 3) {
+        print_help(argv[0]);
+        return 1;
+    }
     landscape_file = argv[1];
     message_file = argv[2];
+#endif
+
+    disable_input();
+    atexit(cleanup);
+    install_handlers();
 
     int total_land_lines = read_file_lines(landscape_file, lines, LINES);
     int total_message_lines = read_file_lines(message_file, message, LINES);

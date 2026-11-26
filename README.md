@@ -3,7 +3,8 @@
 **Lodge** is a small terminal program that gives you a rest (probably after many hours of coding). Type `lodge`, and
 your terminal turns into a quiet place: a small lodge by a river under a sky that follows your real clock.
 
-It runs on **macOS** (Apple Silicon and Intel) and on **Linux** (Debian/Ubuntu, or anything with Homebrew).
+It runs on **macOS** (Apple Silicon and Intel), on **Linux** (Debian/Ubuntu, or anything with Homebrew) and on
+**Windows** 10 and 11.
 
 ![](demo.gif)
 
@@ -31,6 +32,11 @@ The package is not signed yet, so a double click may be blocked by macOS: right-
 ```
 sudo apt install ./lodge_<version>_amd64.deb
 ```
+
+**Windows:** download `lodge-<version>-windows-x64.zip` from the
+[latest release](https://github.com/klukashka/Lodge/releases/latest), unpack it and run `lodge.exe` from the unpacked
+`lodge` folder (double click, or `.\lodge.exe` in Windows Terminal or PowerShell). The program is not signed, so
+SmartScreen may warn about it: **More info → Run anyway**.
 
 **From the sources:**
 
@@ -85,12 +91,13 @@ Lodge ignores every key, the mouse and the scroll wheel, so nothing can spoil th
 - **Ctrl+C** — Lodge writes a farewell and returns you to your shell.
 - **Ctrl+C twice** — leave at once, without the farewell.
 
-(Cmd+C does not work: Terminal.app keeps it for “Copy” and never passes it to a program.)
+(Cmd+C does not work: Terminal.app keeps it for “Copy” and never passes it to a program. On Windows Ctrl+Break works
+too.)
 
 ## 🎛️ Options (environment variables)
 
 - `LODGE_NEW_WINDOW=1` — open a separate full-screen terminal window instead of using the current one
-  (on a Mac it needs the Accessibility permission for “System Events” to go full screen).
+  (not on Windows; on a Mac it needs the Accessibility permission for “System Events” to go full screen).
 - `LODGE_HEMISPHERE=south` — mirror the seasons (day length) for the southern hemisphere.
 - `LODGE_WIND_DIR=left|right` — force the wind direction (by default it is picked once per launch and never changes).
 - `LODGE_DEMO=1` — a wind gust and a fish jump in every time window, to see them without waiting.
@@ -110,9 +117,13 @@ LODGE_SEASON=winter lodge                                        # snow, frozen 
 LODGE_AT="2026-07-01 07:30" LODGE_TIME_SCALE=40000000 lodge      # a whole year in about 40 seconds
 ```
 
+On Windows set a variable first, in PowerShell: `$env:LODGE_SEASON="winter"; .\lodge.exe`.
+
 ## 🛠️ Troubleshooting
 
 - **“Make this terminal bigger…”** — the window is smaller than 74×30; enlarge it or go full screen.
+- **“needs a Windows 10 or later console”** — run `lodge.exe` in Windows Terminal, PowerShell or cmd. In Git Bash use
+  `winpty ./lodge.exe`.
 - **macOS says the .pkg “cannot be opened”** — it is not signed yet. Right-click → **Open**, or install it with
   `sudo installer`. Installing with Homebrew does not have this problem.
 - **The scroll wheel still shows your old commands** — your terminal does not support mouse reporting. Everything else
@@ -127,7 +138,8 @@ so a resize or a minimize can never leave a broken picture. The world around the
 coordinates alone (a hash, no random state), the sky from the system clock, and the wind and the fish from the elapsed
 time. Everything that moves is placed in the coordinates of the picture, then shifted by the window offset, so the
 window size never changes the scene. A small launcher (`scripts/lodge`) finds the files next to itself, so the same package works from `/usr/local`, a
-Homebrew prefix or anywhere else.
+Homebrew prefix or anywhere else. On Windows there is no launcher: `lodge.exe` takes the pictures from the `texts`
+folder next to it, and the console-specific code is in `src/platform_win.h`.
 
 ```
 src/            the program
@@ -136,6 +148,7 @@ texts/          the picture and the opening message
 scripts/lodge   the launcher (the `lodge` command)
 deb/            Debian/Ubuntu package
 macos/          macOS .pkg builder
+                (the Windows archive is built by `make windows`)
 Formula/        Homebrew formula (template for the tap)
 ```
 

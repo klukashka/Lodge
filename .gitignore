@@ -5,3 +5,5 @@
 deb/usr/games/lodge/
 /lodge
 .DS_Store
+build/
+lodge-*-windows-x64.zip
